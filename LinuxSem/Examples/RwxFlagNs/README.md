@@ -15,14 +15,10 @@ example from source:
 | `program.src.elf`, `program.tgt.elf` | the committed BINARIES the proofs are stated over: `SourceMemImage.lean` / `TargetMemImage.lean` are one-line `embedElf%` embeddings of them (`Common/EmbedElf` → `Common/ElfImage`), so the ELF is the artifact and no image is transcribed into Lean |
 | `SourceMemImage.lean`, `TargetMemImage.lean` | the `MemImage` definitions (`embedElf%` + the names the proofs use) and the `decide` sanity checks that pin the ELF, its layout, its entry/phdr record and the payload bytes |
 
-The C source needs the minimal start code and the two project-wide niceties in
-[`../crt/`](../crt/):
-
-* `_start.S` — the `-ns` ("no start files") entry: set up `gp`, publish
-  `environ`, call `main`, exit with its return value.  No libc startup.
-* `environ.S` — an 8-byte `.bss` slot for `environ`, used **only** by the
-  `zig cc` fallback below.  Upstream gets that symbol from musl's libc; see
-  the note in the file.
+The C source needs the minimal start code in [`../crt/`](../crt/):
+`_start.S`, the `-ns` ("no start files") entry — set up `gp`, publish
+`environ` (the symbol comes from musl's libc, which the link still pulls in),
+call `main`, exit with its return value.  No libc startup.
 
 The binaries are not in the upstream repository (it ships the page images as
 `.hex`), so `program.*.elf` are the loader-visible first pages of the upstream
@@ -35,10 +31,32 @@ checked).
 
 ## Rebuilding, and what "reproduced" means
 
+Both compilers are required — there is no fallback: `zig` for the target, and a
+GNU `riscv64-linux-musl-gcc` for the source.  `shell.nix` at the repository root
+puts the latter on `PATH` from nixpkgs:
+
+```sh
+nix-shell --run 'bash tools/e2e/rwx_flag_ns.sh'      # or: nix shell nixpkgs#pkgsCross.riscv64-musl.stdenv.cc -c …
+```
+
+On **aarch64-darwin** that means compiling GCC: the cross compiler is a host
+tool and cache.nixos.org has no darwin builds, so `nix-shell` builds GCC
+(15.2.0 on nixos-unstable) from source — tens of minutes.  Use a Linux host (CI
+does), a Linux builder, or a prebuilt `riscv64-linux-musl` toolchain (musl.cc's
+tarball, ~108 MB) with `SOURCE_CC=<prefix>/bin/riscv64-linux-musl-gcc`.
+
 ```sh
 bash tools/e2e/rwx_flag_ns.sh                # build both, compare at loader level
 bash tools/e2e/rwx_flag_ns.sh --strict-bytes  # fail on any byte difference
 ```
+
+The script refuses to run without the GNU compiler rather than building the
+source with a different one: the committed source binary is one specific GNU
+musl build, and nixpkgs' cross GCC is whatever version the channel has.  A
+different GCC version is expected to emit a different program (same layout);
+that is the warning the source side prints, and the reason its *program* bytes
+are not a hard gate.  With the compiler the binary was built with,
+`--strict-bytes` is the exact gate.
 
 The script uses the upstream command lines:
 
@@ -64,21 +82,46 @@ the loader level** (`tools/e2e/compare_elfs.py`).  Three checks, in order:
    bookkeeping (`e_shoff`/`e_shentsize`/`e_shnum`/`e_shstrndx`) masked.  The
    section table is not loaded, not executed and never read by the program, and
    no two toolchains put it in the same place; the code and data a program runs
-   on must not move.  Required for the **target** always, and for the source
-   when it is built by the documented GNU compiler.
+   on must not move.  Required for the **target** (its compiler family is
+   pinned); the **source** side reports it but does not fail, for the
+   compiler-version reason above.
 3. **Page images** — only with `--strict-bytes`: the bytes the kernel maps,
-   page slack included.  That is exact reproduction and needs the upstream
-   toolchains.
+   page slack included.  That is exact reproduction and needs the compiler the
+   binary was built with.
 
 `--allow-program-drift` drops check 2 (for trying a different toolchain).
 
-Measured on the machine this port was made on (zig 0.14.1; no
-`riscv64-linux-musl-gcc`, so the source used the `zig cc` fallback):
+### Re-baselining after a source change
+
+```sh
+bash tools/e2e/rwx_flag_ns.sh --update
+```
+
+writes the rebuilt binaries back over `program.src.elf` / `program.tgt.elf`,
+but only for a side whose **program** changed — on a clean checkout it writes
+nothing and leaves the committed binaries (and their upstream section tables)
+alone.  Two guards:
+
+- a **layout** change is refused (it changes the example's shape, which the
+  proof's statements are written against) unless `--force` is given;
+- the **source** binary is only replaced when `--update-source` is given: it is
+  one specific GNU build, and a different compiler will emit a different program
+  without that meaning the source changed.  `--update --update-source` is the
+  explicit re-baseline, with the proof work it implies.
+
+After writing, the script deletes the two image modules' build artifacts
+(`embedElf%` reads the ELF at elaboration, outside Lake's dependency graph) and
+prints the Lean command to run.  That build is the second half of the loop:
+the modules' `decide` checks and then the derivation in
+`RwxFlagNsSource.lean` / `RwxFlagNsTarget.lean` fail if the instruction stream
+moved, so a re-baseline cannot silently outrun the proof.
+
+Measured on the machine this port was made on (zig 0.14.1):
 
 | image | layout | program bytes | script |
 | --- | --- | --- | --- |
 | target (Zig) | reproduced | **identical** after masking `e_shoff` (the only differing byte in any file extent is `0x1000028`, the first byte of that pointer); `.text [0x1001190, 0x10011a8)` and the data byte `[0x10021a8, 0x10021a9)` are byte-identical | exit 0 |
-| source (C) | reproduced | 60 bytes differ across `[0x10028, 0x100e4]`: the fallback compiler is clang, the committed binary is the GNU build.  Install `riscv64-linux-musl-gcc` to gate/reproduce it | exit 0, WARN |
+| source (C) | reproduced | depends on the GNU musl compiler version; the committed binary is one specific build.  With an exact match, `--strict-bytes` passes; otherwise the drift is reported and `--update --update-source` re-baselines | exit 0, WARN |
 
 So the committed target snapshot is the current compiler's output up to the
 ELF section table, and the committed source snapshot is the upstream GNU
@@ -110,12 +153,22 @@ layout, entry, phdr record or entry bytes are not the ones the proof expects.
 - **`build`** — `scripts/check.sh`.  RwxFlagNs is in the root module, so this
   runs `embedElf%` over the committed ELFs and typechecks the proof stated over
   those images (the binaries → Lean direction).
-- **`e2e`** — installs zig 0.14.1 (pinned by checksum) and runs
-  `tools/e2e/rwx_flag_ns.sh` (the sources → committed binaries direction).
-  Layout drift fails for both sides; a changed target program fails too; the
-  source's compiler drift is a warning because the GNU musl compiler is not on
-  the runner.  The committed binaries are never rewritten by CI — the script
-  builds into `.lake/e2e/rwx/` and compares.
+- **`e2e`** — installs nix (for nixpkgs' `riscv64-linux-musl-gcc`) and zig
+  0.14.1 (pinned by checksum), then runs `tools/e2e/rwx_flag_ns.sh` under
+  `nix shell nixpkgs#pkgsCross.riscv64-musl.stdenv.cc` (the sources → committed
+  binaries direction).  Layout drift fails for both sides; a changed target
+  program fails too; the source's GCC-version drift is a warning, as above.
+  The committed binaries are never rewritten by CI — the script builds into
+  `.lake/e2e/rwx/` and compares.
+- **`probe-source`** — manual (`workflow_dispatch`), not part of the gate:
+  builds only the source with nixpkgs' cross GCC (a cached download on the
+  Linux runner) and requires the **program bytes** to match the committed
+  binary (`--only=source --require-source-program`).  Green answers "this
+  compiler reproduces the program the proof walks" — which is what would let
+  the source's program bytes become a hard gate by default; red means the
+  committed binary came from some other GCC, and the log says how far off.
+  (The 2021 musl.cc tarball is ruled out as the origin: `ldflags.txt` passes
+  `-Wl,--no-warn-rwx-segments`, which binutils only accepts from 2.39.)
 
 ## Why the image is page-rounded
 

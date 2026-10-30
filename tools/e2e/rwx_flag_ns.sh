@@ -16,35 +16,74 @@
 # then the bytes — per PT_LOAD, its own file extent separately from the page
 # slack around it.
 #
+# THE TOOLCHAINS (both required; there is no fallback)
+#
+#   zig                     builds the target.  Pinned to 0.14.1 in CI.
+#   riscv64-linux-musl-gcc  builds the source (`SOURCE_CC` overrides; the
+#                           nixpkgs cross driver is named
+#                           `riscv64-unknown-linux-musl-gcc` and is found too).
+#
+# Both come from nixpkgs; `shell.nix` at the repository root puts the cross
+# compiler on `PATH` (and in `SOURCE_CC`):
+#
+#     nix-shell --run 'bash tools/e2e/rwx_flag_ns.sh'
+#     nix shell nixpkgs#pkgsCross.riscv64-musl.stdenv.cc -c bash tools/e2e/rwx_flag_ns.sh
+#
+# The script fails, with that hint, rather than silently building the source
+# with a different compiler: the committed source binary is a GNU musl build,
+# and a clang build is a different program (the old `zig cc` fallback is gone).
+#
 # WHAT THE COMPARISON MEANS
 #
 #   layout identical, program bytes identical   -> exit 0 (the image is the same
 #       program; only the section header table, which the loader never reads and
 #       the program never touches, moved)
-#   layout identical, page images identical     -> exit 0 (exact reproduction)
-#   layout identical, program bytes differ      -> FAIL, unless the side was
-#       built by the FALLBACK compiler: the committed source binary comes from
-#       GNU riscv64-linux-musl-gcc, and `zig cc` (clang) emits a different
-#       program.  Then the layout is still gated and the drift is a WARN.
+#   layout identical, page images identical     -> exit 0 (exact reproduction;
+#       `--strict-bytes` demands this)
+#   layout identical, program bytes differ      -> the target FAILS (its compiler
+#       family is pinned in CI); the SOURCE warns instead: its committed
+#       binary is one specific GNU musl build, and nixpkgs' cross GCC is
+#       whatever version the channel has.  Install the compiler the binary was
+#       built with (and use `--strict-bytes`) for an exact gate, or re-baseline
+#       with `--update-source`.
 #   layout differs                              -> FAIL (the recipe or the
 #       committed binary is wrong)
 #
 # The "program bytes" check masks the ELF header's section-table bookkeeping
 # (`e_shoff`/`e_shentsize`/`e_shnum`/`e_shstrndx`) and looks only at each
 # PT_LOAD's own file extent: that is what a CI gate can hold across compiler
-# versions.  `--strict-bytes` instead demands the page images be byte-identical
-# (what a host with the upstream toolchains can achieve), and
-# `--allow-program-drift` drops the program check entirely (for trying a
-# different toolchain).
+# versions.  `--allow-program-drift` drops the target's program check, and
+# `--require-source-program` ADDS the source's (for a host whose GNU compiler is
+# the one the committed binary was built with — the `probe` CI job uses it).
+# `--only=source|target|both` (default both) restricts which side is built and
+# compared, so the source can be probed without zig and vice versa.
 #
-# THE SOURCE COMPILER.  The committed source binary is a GNU
-# riscv64-linux-musl-gcc build (see source/ldflags.txt and the `_start.S` in
-# LinuxSem/Examples/crt/).  If that compiler is not installed, the script falls
-# back to `zig cc`, which cannot link with `-nostartfiles` (zig's driver always
-# adds its own crt1.o) and is clang-based, so it produces a DIFFERENT program
-# with the same layout.  The fallback defines the one symbol the crt needs from
-# musl (`environ`) in LinuxSem/Examples/crt/environ.S.  Override the compiler
-# with SOURCE_CC=...
+# RE-BASELINING (`--update`)
+#
+# Editing a program (or its flags) makes the committed binaries stale.  Rather
+# than only failing, `--update` writes the rebuilt binaries back into the repo:
+#
+#     bash tools/e2e/rwx_flag_ns.sh --update                 # target only
+#     bash tools/e2e/rwx_flag_ns.sh --update --update-source # ... and the source
+#
+# It writes a side only when that side's PROGRAM changed (or when `--force` is
+# given), so on a clean checkout it is a no-op and leaves the committed
+# binaries — including their section tables — untouched.  Guards:
+#
+#   - a LAYOUT change (page extents/permissions, entry, phdr record) changes the
+#     example's SHAPE, which the proof's statements are written against:
+#     `--update` refuses it without `--force`;
+#   - the SOURCE binary is only re-baselined when `--update-source` is given:
+#     the committed one is a specific GNU build, and replacing it makes
+#     `RwxFlagNsSource.lean`'s derivation stale by construction.
+#
+# After writing, the two image modules' build artifacts are deleted — `embedElf%`
+# reads the ELF at elaboration and Lean's build graph does not see that read —
+# and the script prints the Lean command to run.  The PROOF is stated over the
+# old instruction stream: when a program changed, `RwxFlagNsSource.lean` /
+# `RwxFlagNsTarget.lean` must be re-derived (and `RwxFlagNsDefs.lean`'s
+# `stext_lo`/`stext_hi` and `flag`/`__environ` addresses re-checked) — the
+# modules' `decide` checks fail until then, which is the intended signal.
 set -euo pipefail
 cd "$(dirname "$0")/../.."          # repository root
 
@@ -55,60 +94,136 @@ ROOT="$(pwd)"
 
 STRICT_BYTES=0
 ALLOW_PROGRAM_DRIFT=0
+REQUIRE_SOURCE_PROGRAM=0
+DO_UPDATE=0
+UPDATE_SOURCE=0
+FORCE=0
+ONLY=both
 for arg in "$@"; do
   case "$arg" in
     --strict-bytes) STRICT_BYTES=1 ;;
     --allow-program-drift) ALLOW_PROGRAM_DRIFT=1 ;;
-    *) echo "usage: $0 [--strict-bytes | --allow-program-drift]" >&2; exit 2 ;;
+    --require-source-program) REQUIRE_SOURCE_PROGRAM=1 ;;
+    --update) DO_UPDATE=1 ;;
+    --update-source) UPDATE_SOURCE=1 ;;
+    --force) FORCE=1 ;;
+    --only=source) ONLY=source ;;
+    --only=target) ONLY=target ;;
+    --only=both) ONLY=both ;;
+    *) echo "usage: $0 [--strict-bytes | --allow-program-drift] [--require-source-program] [--only=source|target|both] [--update [--update-source] [--force]]" >&2; exit 2 ;;
   esac
 done
+if [ "$REQUIRE_SOURCE_PROGRAM" = 1 ] && [ "$STRICT_BYTES" = 1 ]; then
+  echo "--strict-bytes already demands the page images be identical; --require-source-program is redundant." >&2
+  exit 2
+fi
+if [ "$DO_UPDATE" = 1 ] && [ "$STRICT_BYTES" = 1 ]; then
+  echo "--update writes the rebuilt binaries; --strict-bytes only checks them. Pick one." >&2
+  exit 2
+fi
+if [ "$UPDATE_SOURCE" = 1 ] && [ "$DO_UPDATE" = 0 ]; then
+  echo "--update-source only makes sense together with --update." >&2
+  exit 2
+fi
 
-ZIG="${ZIG:-zig}"
-SOURCE_CC="${SOURCE_CC:-riscv64-linux-musl-gcc}"
 warn() { printf '\033[33mWARN\033[0m %s\n' "$*"; }
 fail() { printf '\033[31mFAIL\033[0m %s\n' "$*" >&2; exit 1; }
 
-# ---------------------------------------------------------------- 1. source
-echo "== 1/3  source: $EX/source/program.c"
-if command -v "$SOURCE_CC" >/dev/null 2>&1; then
-  echo "         with $SOURCE_CC (the upstream toolchain)"
-  ( cd "$EX/source" && "$SOURCE_CC" -std=gnu17 -march=rv64imafd -Os -static \
-      -nostartfiles -fno-builtin -fno-strict-aliasing \
-      $(grep -hv '^#' ldflags.txt) \
-      ../../crt/_start.S program.c -o "$ROOT/$OUT/program.src" )
-  SRC_TOOLCHAIN=upstream
+NIX_HINT="nix shell nixpkgs#pkgsCross.riscv64-musl.stdenv.cc -c bash tools/e2e/rwx_flag_ns.sh"
+
+BUILD_SOURCE=1; BUILD_TARGET=1
+[ "$ONLY" = target ] && BUILD_SOURCE=0
+[ "$ONLY" = source ] && BUILD_TARGET=0
+
+# The source compiler: required, no fallback.  `SOURCE_CC` wins; otherwise the
+# two names the toolchains use (musl.cc / distro vs nixpkgs' cross driver).
+if [ "$BUILD_SOURCE" = 0 ]; then
+  CC=
+elif [ -n "${SOURCE_CC:-}" ]; then
+  CC="$SOURCE_CC"
+elif command -v riscv64-linux-musl-gcc >/dev/null 2>&1; then
+  CC=riscv64-linux-musl-gcc
+elif command -v riscv64-unknown-linux-musl-gcc >/dev/null 2>&1; then
+  CC=riscv64-unknown-linux-musl-gcc
 else
-  warn "no $SOURCE_CC on PATH: falling back to zig cc (clang codegen, and"
-  warn "no -nostartfiles support, so crt/environ.S supplies musl's environ)."
-  warn "The image will have the same LAYOUT and a different program."
-  ( cd "$EX/source" && "$ZIG" cc -target riscv64-linux-musl -mcpu=baseline_rv64-c \
-      -std=gnu17 -Os -static -nostdlib -fno-builtin -fno-strict-aliasing \
-      -Wl,-T,rwx.lds \
-      ../../crt/_start.S ../../crt/environ.S program.c \
-      -o "$ROOT/$OUT/program.src" )
-  SRC_TOOLCHAIN=fallback
+  fail "no riscv64-linux-musl-gcc on PATH (the source binary is a GNU musl build; this script does not fall back to another compiler).
+  Install one, e.g. from nixpkgs:
+      $NIX_HINT
+  or \`nix-shell\` at the repository root (shell.nix), or set SOURCE_CC to one.
+  (On aarch64-darwin nixpkgs has no cached cross GCC, so shell.nix BUILDS it
+  from source — use a Linux host/CI, or a prebuilt toolchain such as musl.cc's
+  riscv64-linux-musl-cross, with SOURCE_CC set.)"
+fi
+if [ "$BUILD_SOURCE" = 1 ]; then
+  command -v "$CC" >/dev/null 2>&1 || fail "SOURCE_CC=$CC is not executable"
+  # no `| head -1`: `pipefail` turns the SIGPIPE a compiler gets when `head`
+  # exits into a script failure (observed with zig's long `--version` output).
+  CC_VERSION=$("$CC" --version 2>/dev/null || true)
+  CC_VERSION=${CC_VERSION%%$'\n'*}
+fi
+
+if [ "$BUILD_TARGET" = 1 ]; then
+  ZIG="${ZIG:-zig}"
+  command -v "$ZIG" >/dev/null 2>&1 || fail "no zig on PATH (the target is built with \`zig build-exe\`; CI pins 0.14.1)"
+fi
+
+# ---------------------------------------------------------------- 1. source
+if [ "$BUILD_SOURCE" = 1 ]; then
+  echo "== 1/3  source: $EX/source/program.c"
+  echo "         with $CC ($CC_VERSION)"
+  # The upstream flags, verbatim — except that `-Wl,--no-warn-rwx-segments`
+  # only silences a warning the linker emits for RWX segments, and binutils
+  # before 2.39 rejects the option outright (musl.cc's 2021 toolchain ships
+  # 2.37).  Probe the linker once and drop the flag when it is not accepted, so
+  # an old-but-correct toolchain is not reported as a build failure.
+  LDFLAGS=$(grep -hv '^#' "$EX/source/ldflags.txt")
+  RWX_FLAG='-Wl,--no-warn-rwx-segments'
+  if printf '%s\n' "$LDFLAGS" | grep -q -- "$RWX_FLAG"; then
+    printf 'int main(void) { return 0; }\n' > "$OUT/linkprobe.c"
+    if ! "$CC" "$RWX_FLAG" -o "$OUT/linkprobe" "$OUT/linkprobe.c" >/dev/null 2>&1; then
+      warn "this toolchain's linker rejects $RWX_FLAG (binutils < 2.39);"
+      warn "dropping it — it only silences the RWX-segment warning."
+      LDFLAGS=$(printf '%s\n' "$LDFLAGS" | grep -v -- "$RWX_FLAG")
+    fi
+  fi
+  # shellcheck disable=SC2086
+  ( cd "$EX/source" && "$CC" -std=gnu17 -march=rv64imafd -Os -static \
+      -nostartfiles -fno-builtin -fno-strict-aliasing $LDFLAGS \
+      ../../crt/_start.S program.c -o "$ROOT/$OUT/program.src" )
 fi
 
 # ---------------------------------------------------------------- 2. target
-echo "== 2/3  target: $EX/target/program.zig"
-# the upstream command line: zig build-exe, freestanding, flags from flags.txt
-TGT_FLAGS=$(grep -hv '^#' "$EX/target/flags.txt" | tr '\n' ' ')
-# shellcheck disable=SC2086
-"$ZIG" build-exe "$EX/target/program.zig" $TGT_FLAGS \
-  -target riscv64-linux-none -femit-bin="$OUT/program.tgt"
+if [ "$BUILD_TARGET" = 1 ]; then
+  echo "== 2/3  target: $EX/target/program.zig"
+  # the upstream command line: zig build-exe, freestanding, flags from flags.txt
+  TGT_FLAGS=$(grep -hv '^#' "$EX/target/flags.txt" | tr '\n' ' ')
+  # shellcheck disable=SC2086
+  "$ZIG" build-exe "$EX/target/program.zig" $TGT_FLAGS \
+    -target riscv64-linux-none -femit-bin="$OUT/program.tgt"
+fi
 
 # ---------------------------------------------------------------- 3. compare
 echo "== 3/3  compare the rebuilt binaries with the committed ones (loader level)"
 drift=0
+updated=0
+skipped=0
 for pair in "src:source" "tgt:target"; do
   tag=${pair%%:*}; kind=${pair##*:}
-  # Program identity is required for the target (same compiler family), and
-  # for the source when it was built by the documented GNU compiler.  With the
-  # `zig cc` fallback the source program is known to differ (clang vs gcc), so
-  # only its layout is gated there.
+  [ "$kind" = source ] && [ "$BUILD_SOURCE" = 0 ] && continue
+  [ "$kind" = target ] && [ "$BUILD_TARGET" = 0 ] && continue
+  # In read-only mode the target's program bytes are required (CI pins its
+  # compiler family); the source's are not, because the committed binary is one
+  # specific GNU musl build and nixpkgs' cross GCC is whatever the channel has.
+  # `--update` asks for the program check on both sides, to learn whether a
+  # side actually changed.
   require_program=0
-  if [ "$STRICT_BYTES" = 0 ] && [ "$ALLOW_PROGRAM_DRIFT" = 0 ]; then
-    if [ "$kind" = target ] || [ "$SRC_TOOLCHAIN" = upstream ]; then
+  if [ "$STRICT_BYTES" = 0 ]; then
+    if [ "$DO_UPDATE" = 1 ]; then
+      require_program=1
+    elif [ "$ALLOW_PROGRAM_DRIFT" = 0 ] && [ "$kind" = target ]; then
+      require_program=1
+    elif [ "$ALLOW_PROGRAM_DRIFT" = 0 ] && [ "$REQUIRE_SOURCE_PROGRAM" = 1 ] \
+         && [ "$kind" = source ]; then
       require_program=1
     fi
   fi
@@ -117,6 +232,34 @@ for pair in "src:source" "tgt:target"; do
 
   rc=0
   python3 tools/e2e/compare_elfs.py "${args[@]}" || rc=$?
+
+  if [ "$DO_UPDATE" = 1 ]; then
+    case $rc in
+      0) echo "  $kind: program unchanged; committed binary left as it is" ;;
+      1)
+        if [ "$FORCE" = 0 ]; then
+          fail "$kind: the LAYOUT changed; that changes the example's shape (the proof's statements) — re-baseline by hand, or pass --force"
+        fi
+        cp "$OUT/program.$tag" "$EX/program.$tag.elf"
+        echo "  $kind: UPDATED $EX/program.$tag.elf (layout changed, --force)"
+        updated=1 ;;
+      2|3)
+        if [ "$kind" = source ] && [ "$UPDATE_SOURCE" = 0 ]; then
+          skipped=1
+          warn "source: this compiler emits a different program than the committed"
+          warn "binary ($CC_VERSION).  The committed source build is pinned; pass"
+          warn "--update-source to re-baseline it (and expect to re-derive"
+          warn "RwxFlagNsSource.lean)."
+        else
+          cp "$OUT/program.$tag" "$EX/program.$tag.elf"
+          echo "  $kind: UPDATED $EX/program.$tag.elf"
+          updated=1
+        fi ;;
+      *) fail "$kind: comparison failed" ;;
+    esac
+    continue
+  fi
+
   case $rc in
     0)
       if [ "$STRICT_BYTES" = 1 ]; then
@@ -124,27 +267,54 @@ for pair in "src:source" "tgt:target"; do
       elif [ "$require_program" = 1 ]; then
         echo "  $kind: layout + program bytes REPRODUCED (section table ignored)"
       else
-        echo "  $kind: layout REPRODUCED (byte-level drift reported above)"
+        echo "  $kind: layout REPRODUCED"
       fi ;;
     2)
       drift=1
-      if [ "$kind" = source ] && [ "$SRC_TOOLCHAIN" = fallback ]; then
-        warn "source: the committed binary is the GNU riscv64-linux-musl-gcc"
-        warn "build; this host used zig cc (clang), so the instructions differ."
-        warn "Install riscv64-linux-musl-gcc (or set SOURCE_CC) to reproduce it."
-        warn "Layout is verified; the program bytes are not gated on this host."
-      elif [ "$STRICT_BYTES" = 1 ]; then
+      if [ "$STRICT_BYTES" = 1 ]; then
         warn "$kind: page images differ (--strict-bytes measures exactly that;"
-        warn "only the upstream toolchains reproduce them)."
+        warn "only the compiler the binary was built with reproduces them)."
       else
-        warn "$kind: same image LAYOUT and different page bytes; see the"
-        warn "per-segment lines above."
+        warn "$kind: same image LAYOUT, different page bytes; see the"
+        warn "per-segment lines above.  The committed source binary is one"
+        warn "specific GNU musl build: install that compiler (and pass"
+        warn "--require-source-program, or --strict-bytes) for an exact gate,"
+        warn "or re-baseline with --update --update-source."
       fi ;;
     3)
-      fail "$kind: the rebuilt binary is a DIFFERENT PROGRAM from the committed one (see above); re-baseline it or pass --allow-program-drift" ;;
+      fail "$kind: the rebuilt binary is a DIFFERENT PROGRAM from the committed one (see above); re-baseline it (--update) or pass --allow-program-drift" ;;
     *) fail "$kind: the rebuilt binary has a DIFFERENT LAYOUT from the committed one" ;;
   esac
 done
+
+if [ "$DO_UPDATE" = 1 ]; then
+  if [ "$updated" = 1 ]; then
+    # `embedElf%` reads the ELF at elaboration time and Lean's build graph
+    # cannot see that read: drop the image modules' artifacts, or the build
+    # would keep using the image it parsed last time.
+    for mod in SourceMemImage TargetMemImage; do
+      for ext in olean olean.hash ilean ilean.hash trace; do
+        rm -f ".lake/build/lib/lean/LinuxSem/Examples/RwxFlagNs/$mod.$ext"
+      done
+    done
+    cat <<'EOF'
+
+Updated the committed binaries. Next:
+
+    lake build LinuxSem.Examples.RwxFlagNs.Proof
+
+The proof is stated over the OLD instruction stream.  If a program changed,
+re-derive RwxFlagNsSource.lean / RwxFlagNsTarget.lean and re-check
+RwxFlagNsDefs.lean's stext_lo/stext_hi and the flag/__environ addresses; the
+image modules' decide checks fail (by design) until that is done.
+EOF
+  elif [ "$skipped" = 1 ]; then
+    echo "Nothing written (the source was skipped; see the WARN above)."
+  else
+    echo "Nothing to update: the committed binaries already describe the sources."
+  fi
+  exit 0
+fi
 
 if [ "$drift" = 1 ] && [ "$STRICT_BYTES" = 1 ]; then
   fail "byte-identical reproduction was requested (--strict-bytes) and failed"
