@@ -18,7 +18,8 @@ Zero dependencies beyond Lean itself. Toolchain pinned in `lean-toolchain`.
 | `EquivalenceDefinition/` | what it means for two images to agree: the equivalence, the measures, the classifier surfaces |
 | `Checks/` | checkers, witnesses, and the verification layer |
 | `Common/` | shared machinery: the symbolic-execution tower, the ASan plan checker and its soundness proof, the tactic library |
-| `Examples/` | three worked demonstrations, each with a sealed specification and a proof that it is met |
+| `OssVerify/` | statements about a compiled fuzz target, and the rules for proving or refuting them |
+| `Examples/` | worked demonstrations, each with a statement and a proof that it is met |
 
 ## Building
 
@@ -57,6 +58,7 @@ first column is the name `scripts/AxiomAudit.lean` pins.
 | `mm_refutes_budgets_only`, `cm_run_budget_only_refused` | the finer budget premise — which does not excuse a request whose charge alone exceeds the whole budget — is refutable on a run, and the cumulative refusal is still excluded. | `Checks/OversizeReachable.lean` |
 | `sv48_band_is_linux_set`, `sv39_band_is_linux_set` | the mmap-base band `[mmap_base_min, mmap_base_max]` is EXACTLY the set of bases Linux gives, under two named assumptions, with examples showing each is needed. | `Checks/Cases/MmapBase.lean` |
 | `gate_exit0_accepts`, `gate_exit1_rejects` | the accept/reject gate is decided on both demo verdicts. | `Checks/GatedSize.lean` |
+| `plain_halts_holds`, `buggy_halts_refuted` | a compiled riscv64 fuzz target exits 0 or 2 on every input, and the same source without its fixes faults. | `Examples/FuzzTlv/` (its README lists the limits) |
 | `DemoSealed`, `omni_strong_universal` | the worked demonstrations' sealed specifications (a full `SPEC_PATCH_CLASSIFY` instance, so the classifier surface is inhabited), and proofs that their images meet them. | `Examples/` |
 
 ## Documentation

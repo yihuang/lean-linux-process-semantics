@@ -72,3 +72,10 @@ jobs:
         run: |
           nix-shell -I "nixpkgs=$NIXPKGS" --option max-jobs 0 \
             --run 'zig version; bash tools/e2e/rwx_flag_ns.sh' 
+
+      - name: Rebuild FuzzTlv and run it under QEMU
+        env:
+          NIXPKGS: https://github.com/NixOS/nixpkgs/archive/c0f3d81a7ddbc2b1332be0d8481a672b4f6004d6.tar.gz
+        run: |
+          nix-shell -I "nixpkgs=$NIXPKGS" --option max-jobs 0 -p zig qemu \
+            --run 'bash tools/e2e/fuzz_tlv.sh --require-qemu'

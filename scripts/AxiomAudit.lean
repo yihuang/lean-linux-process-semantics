@@ -178,3 +178,15 @@ open LinuxSem
 #print axioms Checks.Cases.MmapBase.sv39_band_is_linux_set
 #print axioms Checks.Cases.MmapBase.rnd_bits_25_and_a_huge_guard_go_below_the_floor
 #print axioms Checks.Cases.MmapBase.floor_guard_max_is_tight
+
+/- 16. The fuzz-target statements: each shape is the model's definition, and a
+       compiled binary meets it while the same source without its fixes does not. -/
+
+#print axioms OssVerify.Shapes.agrees_is_lps
+#print axioms OssVerify.Shapes.halts_within_budget_is_lps
+#print axioms OssVerify.Shapes.halts_may_fail_is_lps
+#print axioms OssVerify.Controls.exit0_agrees
+#print axioms Examples.FuzzTlv.FixedProof.plain_halts_holds
+#print axioms Examples.FuzzTlv.FixedProof.plain_halts_may_fail_holds
+#print axioms Examples.FuzzTlv.BuggyRefutation.buggy_halts_refuted
+#print axioms Examples.FuzzTlv.BuggyRefutation.buggy_halts_may_fail_refuted
