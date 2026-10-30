@@ -50,20 +50,6 @@ jobs:
       - name: Install nix
         uses: cachix/install-nix-action@v31
 
-      # zig builds the RwxFlagNs target.  Pinned; the checksum is the one
-      # https://ziglang.org/download/index.json publishes for this tarball.
-      - name: Install zig 0.14.1
-        run: |
-          set -euo pipefail
-          curl -sSfL "https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz" -o /tmp/zig.tar.xz
-          echo "24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c  /tmp/zig.tar.xz" | sha256sum -c -
-          mkdir -p "$HOME/zig"
-          tar -xJf /tmp/zig.tar.xz -C "$HOME/zig" --strip-components=1
-          echo "$HOME/zig" >> "$GITHUB_PATH"
-
-      - name: zig version
-        run: zig version
-
       # Rebuilds both programs from source and compares each with its committed
       # ELF at the loader level (tools/e2e/compare_elfs.py): segment extents and
       # permissions, entry point, derived AT_PHDR, and the bytes each PT_LOAD
@@ -75,13 +61,14 @@ jobs:
       # measured to produce a different PROGRAM (25 of 229 file-extent bytes,
       # code included), so a warning is the correct outcome.  A `--strict-bytes`
       # run on a host with the exact compiler is the byte-level gate.
+      # Both compilers come from ONE pinned nixpkgs revision via `shell.nix`:
+      # `pkgsCross.riscv64-musl` for the C side and `pkgs.zig` (0.15.2) for the
+      # target.  `-I nixpkgs=<pinned archive>` fixes the revision, and
+      # `--option max-jobs 0` turns a cache miss into a fast failure instead of
+      # a GCC/zig source build.
       - name: Rebuild and compare the committed ELF images
+        env:
+          NIXPKGS: https://github.com/NixOS/nixpkgs/archive/c0f3d81a7ddbc2b1332be0d8481a672b4f6004d6.tar.gz
         run: |
-          nix shell --impure --option max-jobs 0 \
-            --expr 'let
-              np = builtins.fetchTarball {
-                url = "https://github.com/NixOS/nixpkgs/archive/c0f3d81a7ddbc2b1332be0d8481a672b4f6004d6.tar.gz";
-              };
-              pkgs = import np { system = "x86_64-linux"; };
-            in pkgs.pkgsCross.riscv64-musl.stdenv.cc' \
-            -c bash tools/e2e/rwx_flag_ns.sh
+          nix-shell -I "nixpkgs=$NIXPKGS" --option max-jobs 0 \
+            --run 'zig version; bash tools/e2e/rwx_flag_ns.sh' 

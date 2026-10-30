@@ -18,16 +18,18 @@
 #
 # THE TOOLCHAINS (both required; there is no fallback)
 #
-#   zig                     builds the target.  Pinned to 0.14.1 in CI.
+#   zig                     builds the target (0.15.2 from nixpkgs' `pkgs.zig`;
+#                           its `.text`/data are byte-identical to the
+#                           committed target binary).
 #   riscv64-linux-musl-gcc  builds the source (`SOURCE_CC` overrides; the
 #                           nixpkgs cross driver is named
 #                           `riscv64-unknown-linux-musl-gcc` and is found too).
 #
-# Both come from nixpkgs; `shell.nix` at the repository root puts the cross
-# compiler on `PATH` (and in `SOURCE_CC`):
+# Both come from nixpkgs; `shell.nix` at the repository root provides both,
+# the cross compiler also as `SOURCE_CC`:
 #
 #     nix-shell --run 'bash tools/e2e/rwx_flag_ns.sh'
-#     nix shell nixpkgs#pkgsCross.riscv64-musl.stdenv.cc -c bash tools/e2e/rwx_flag_ns.sh
+#     nix shell nixpkgs#pkgsCross.riscv64-musl.stdenv.cc nixpkgs#zig -c bash tools/e2e/rwx_flag_ns.sh
 #
 # The script fails, with that hint, rather than silently building the source
 # with a different compiler: the committed source binary is a GNU musl build,
@@ -164,7 +166,7 @@ fi
 
 if [ "$BUILD_TARGET" = 1 ]; then
   ZIG="${ZIG:-zig}"
-  command -v "$ZIG" >/dev/null 2>&1 || fail "no zig on PATH (the target is built with \`zig build-exe\`; CI pins 0.14.1)"
+  command -v "$ZIG" >/dev/null 2>&1 || fail "no zig on PATH (the target is built with \`zig build-exe\`; \`nix-shell\` at the repository root provides it — shell.nix)"
 fi
 
 # ---------------------------------------------------------------- 1. source

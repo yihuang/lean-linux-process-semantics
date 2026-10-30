@@ -33,10 +33,11 @@ checked).
 
 Both compilers are required — there is no fallback: `zig` for the target, and a
 GNU `riscv64-linux-musl-gcc` for the source.  `shell.nix` at the repository root
-puts the latter on `PATH` from nixpkgs:
+provides BOTH from one nixpkgs revision (`pkgsCross.riscv64-musl` and
+`pkgs.zig`, i.e. 0.15.2), so the environment is a single command:
 
 ```sh
-nix-shell --run 'bash tools/e2e/rwx_flag_ns.sh'      # or: nix shell nixpkgs#pkgsCross.riscv64-musl.stdenv.cc -c …
+nix-shell --run 'bash tools/e2e/rwx_flag_ns.sh'
 ```
 
 On **aarch64-darwin** that means compiling GCC: the cross compiler is a host
@@ -116,7 +117,7 @@ the modules' `decide` checks and then the derivation in
 `RwxFlagNsSource.lean` / `RwxFlagNsTarget.lean` fail if the instruction stream
 moved, so a re-baseline cannot silently outrun the proof.
 
-Measured on the machine this port was made on (zig 0.14.1):
+Measured on the machine this port was made on (nixpkgs' zig 0.15.2):
 
 | image | layout | program bytes | script |
 | --- | --- | --- | --- |
@@ -153,10 +154,10 @@ layout, entry, phdr record or entry bytes are not the ones the proof expects.
 - **`build`** — `scripts/check.sh`.  RwxFlagNs is in the root module, so this
   runs `embedElf%` over the committed ELFs and typechecks the proof stated over
   those images (the binaries → Lean direction).
-- **`e2e`** — installs nix (for nixpkgs' `riscv64-linux-musl-gcc`) and zig
-  0.14.1 (pinned by checksum), then runs `tools/e2e/rwx_flag_ns.sh` under
-  `nix shell nixpkgs#pkgsCross.riscv64-musl.stdenv.cc` (the sources → committed
-  binaries direction).  Layout drift fails for both sides; a changed target
+- **`e2e`** — installs nix, then runs `tools/e2e/rwx_flag_ns.sh` inside
+  `nix-shell -I nixpkgs=<pinned archive>`, i.e. through `shell.nix`, so both
+  compilers (the cross GCC and `pkgs.zig`) come from one pinned nixpkgs
+  revision (the sources → committed binaries direction).  Layout drift fails for both sides; a changed target
   program fails too; the source's GCC-version drift is a warning, as above.
   The committed binaries are never rewritten by CI — the script builds into
   `.lake/e2e/rwx/` and compares.

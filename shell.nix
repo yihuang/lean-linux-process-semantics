@@ -3,11 +3,16 @@
 #   nix-shell
 #   nix-shell --run 'bash tools/e2e/rwx_flag_ns.sh'
 #
-# nixpkgs' riscv64-linux-musl cross GCC (driver:
-# `riscv64-unknown-linux-musl-gcc`, handed to the script as SOURCE_CC).  That is
-# the compiler the RwxFlagNs source binary is built with; the script has no
-# fallback, so it is not optional.  Zig — the target's compiler — is not in this
-# shell; install it separately (CI pins 0.14.1).
+# The two compilers the e2e flow needs, from the same nixpkgs revision:
+#
+#   pkgsCross.riscv64-musl.stdenv.cc  the GNU musl cross GCC that builds the
+#       RwxFlagNs SOURCE binary (driver `riscv64-unknown-linux-musl-gcc`,
+#       handed to the script as SOURCE_CC; the script has no fallback);
+#   pkgs.zig  the TARGET compiler (`zig build-exe`, 0.15.2 on the pinned rev —
+#       its `.text`/data are byte-identical to the committed target binary).
+#
+# CI uses this same shell, with `-I nixpkgs=<pinned archive>` so both versions
+# are fixed.
 #
 # ON aarch64-darwin, READ THIS FIRST: the cross GCC is a *host* tool, and
 # cache.nixos.org only carries Linux builds (Hydra does not build darwin), so
@@ -26,6 +31,6 @@ let
   cc = pkgs.pkgsCross.riscv64-musl.stdenv.cc;
 in
 pkgs.mkShell {
-  packages = [ cc ];
+  packages = [ cc pkgs.zig ];
   SOURCE_CC = "${cc}/bin/riscv64-unknown-linux-musl-gcc";
 }
