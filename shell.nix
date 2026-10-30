@@ -33,4 +33,20 @@ in
 pkgs.mkShell {
   packages = [ cc pkgs.zig ];
   SOURCE_CC = "${cc}/bin/riscv64-unknown-linux-musl-gcc";
+  # REPRODUCE THE COMMITTED BINARY.  nixpkgs' compiler wrapper injects its
+  # stdenv hardening and its default PIE/arch choices into every invocation:
+  # `-fPIC`, `-pie`, `-fstack-clash-protection`, `-fzero-call-used-regs=used-gpr`,
+  # `-fstack-protector-strong`, `-fno-omit-frame-pointer`, `-march=rv64gc`.  On
+  # this program they change the RESULT: `flag` is addressed through `auipc`
+  # instead of absolute `lui`, `main` grows a 16-byte stack frame, and
+  # `e_flags` claims the C extension.  With the cancels below, GCC 15.2 compiles
+  # the committed (upstream GNU) PROGRAM BYTES exactly — only the section-table
+  # pointer differs — which is what the e2e gate requires.
+  #
+  # The `_riscv64_unknown_linux_musl` suffix is the wrapper's target-specific
+  # variable; the wrapper appends it LAST, which is why these win.
+  NIX_CFLAGS_COMPILE_riscv64_unknown_linux_musl =
+    "-fno-PIC -fno-pie -fno-stack-clash-protection -fno-stack-protector "
+    + "-fzero-call-used-regs=skip -fomit-frame-pointer -fno-strict-overflow";
+  NIX_LDFLAGS = "-no-pie";
 }

@@ -52,12 +52,11 @@ bash tools/e2e/rwx_flag_ns.sh --strict-bytes  # fail on any byte difference
 ```
 
 The script refuses to run without the GNU compiler rather than building the
-source with a different one: the committed source binary is one specific GNU
-musl build, and nixpkgs' cross GCC is whatever version the channel has.  A
-different GCC version is expected to emit a different program (same layout);
-that is the warning the source side prints, and the reason its *program* bytes
-are not a hard gate.  With the compiler the binary was built with,
-`--strict-bytes` is the exact gate.
+source with a different one.  With the pinned shell the source's **program
+bytes are a hard gate**, and that is a measured fact rather than a hope — but
+it took cancelling nixpkgs' compiler-wrapper flags to get there (see below).
+`--allow-program-drift` drops the gate for a different toolchain, and
+`--strict-bytes` goes further and demands the page images be identical.
 
 The script uses the upstream command lines:
 
@@ -122,12 +121,22 @@ Measured on the machine this port was made on (nixpkgs' zig 0.15.2):
 | image | layout | program bytes | script |
 | --- | --- | --- | --- |
 | target (Zig) | reproduced | **identical** after masking `e_shoff` (the only differing byte in any file extent is `0x1000028`, the first byte of that pointer); `.text [0x1001190, 0x10011a8)` and the data byte `[0x10021a8, 0x10021a9)` are byte-identical | exit 0 |
-| source (C) | reproduced | depends on the GNU musl compiler version; the committed binary is one specific build.  With an exact match, `--strict-bytes` passes; otherwise the drift is reported and `--update --update-source` re-baselines | exit 0, WARN |
+| source (C) | reproduced | **identical** after masking `e_shoff` and `e_flags`; the other 227 file-extent bytes (every instruction and data byte) match the committed upstream binary | exit 0 |
 
-So the committed target snapshot is the current compiler's output up to the
-ELF section table, and the committed source snapshot is the upstream GNU
-build.  The proofs are stated over the committed bytes — a compiler upgrade
-that changes them is a change to the example, not a silent re-baseline.
+**What the discrepancy was, and what it was not.**  The first builds with the
+pinned GCC differed from the committed source binary by 25 bytes, and the
+difference was NOT the compiler version: nixpkgs' compiler wrapper injects its
+stdenv hardening and target defaults (`-fPIC`, `-pie`,
+`-fstack-clash-protection`, `-fzero-call-used-regs=used-gpr`,
+`-fstack-protector-strong`, `-fno-omit-frame-pointer`, `-march=rv64gc`).  On
+this program those produce `auipc`-relative addressing of `flag` instead of the
+absolute `lui`, a 16-byte stack frame in `main` (which stores to and reloads
+from the STACK — a different proof shape), and the RVC bit in `e_flags`.
+`shell.nix` cancels them (see its comment); with that, GCC 15.2 reproduces the
+committed PROGRAM BYTES exactly, and the proof needs no change.  The two masked
+header fields are the only residue: `e_shoff` (section-table placement) and
+`e_flags` (float-ABI/RVC declaration, which GNU ld derives from the linked
+libc's `-march`; the kernel reads neither).
 
 One caveat about the ELF files: `embedElf%` reads them at elaboration time, and
 Lean's build does NOT track that read (neither does `include_str`).  Replacing a
@@ -159,13 +168,15 @@ layout, entry, phdr record or entry bytes are not the ones the proof expects.
   compilers (the cross GCC and `pkgs.zig`) come from one pinned nixpkgs
   revision (the sources → committed binaries direction).  Layout drift fails for both sides; a changed target
   program fails too; the source's GCC-version drift is a warning, as above.
-  The committed binaries are never rewritten by CI — the script builds into
-  `.lake/e2e/rwx/` and compares.
+  Both sides' **program bytes** are gated, not just the layout; the committed
+  binaries are never rewritten by CI — the script builds into `.lake/e2e/rwx/`
+  and compares.
 
-**What the current toolchain measures.**  nixpkgs' cross GCC (15.2.0, binutils
-2.44) gives the source image the same *layout* but a **different program**: 25
-of the 229 file-extent bytes differ, including two instruction encodings in
-`.text` and a larger `p_memsz` (0x110 vs 0xf0) — not merely the section table.
+**What the current toolchain measures.**  With `shell.nix`'s flag environment,
+nixpkgs' cross GCC (15.2.0, binutils 2.44) reproduces the committed source
+program bytes; without it (plain hardening flags) it gives the same layout but
+a different program — 25 of 229 bytes, a stack frame in `main` and `auipc`
+addressing.
 So the committed source binary came from an older GNU build, the source's
 program bytes stay a warning, and making them a hard gate needs either that
 original compiler (then `--strict-bytes`) or a re-baseline

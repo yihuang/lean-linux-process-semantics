@@ -44,10 +44,19 @@ import sys
 PAGE = 4096
 PT_LOAD = 1
 
-# ELF64 header fields that point at the section header table (or describe it).
-# Zeroed by `--require-program-identical`: the table is not part of the image a
-# program runs on, and its placement is a toolchain detail.
-SHDR_FIELDS = ((0x28, 8), (0x3a, 2), (0x3c, 2), (0x3e, 2))
+# ELF64 header fields the LOADER does not act on, zeroed by
+# `--require-program-identical`:
+#   - `e_shoff`/`e_shentsize`/`e_shnum`/`e_shstrndx` (0x28, 0x3a..0x40): where
+#     the section header table is.  Not part of the image a program runs on, and
+#     no two toolchains place it identically.
+#   - `e_flags` (0x30): the float-ABI and RVC declaration.  The kernel ignores
+#     it; GNU ld derives it from the LINKED LIBC's attributes, so it differs
+#     whenever the libc was built with a different `-march` even though the code
+#     and data are byte-identical (nixpkgs' musl is rv64gc, the upstream one was
+#     not).
+# Everything else in the file extent — every instruction and data byte the
+# program touches — is compared.
+SHDR_FIELDS = ((0x28, 8), (0x30, 4), (0x3a, 2), (0x3c, 2), (0x3e, 2))
 
 
 def parse(path):

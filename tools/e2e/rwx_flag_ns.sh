@@ -42,12 +42,12 @@
 #       the program never touches, moved)
 #   layout identical, page images identical     -> exit 0 (exact reproduction;
 #       `--strict-bytes` demands this)
-#   layout identical, program bytes differ      -> the target FAILS (its compiler
-#       family is pinned in CI); the SOURCE warns instead: its committed
-#       binary is one specific GNU musl build, and nixpkgs' cross GCC is
-#       whatever version the channel has.  Install the compiler the binary was
-#       built with (and use `--strict-bytes`) for an exact gate, or re-baseline
-#       with `--update-source`.
+#   layout identical, program bytes differ      -> FAIL for BOTH sides:
+#       `shell.nix` pins the toolchain (cross GCC + flags) and was measured to
+#       reproduce the committed source binary's program bytes exactly (only the
+#       section-table pointer and `e_flags` differ, both masked), and the target
+#       likewise.  `--allow-program-drift` is the escape hatch for trying a
+#       different toolchain.
 #   layout differs                              -> FAIL (the recipe or the
 #       committed binary is wrong)
 #
@@ -105,7 +105,7 @@ for arg in "$@"; do
   case "$arg" in
     --strict-bytes) STRICT_BYTES=1 ;;
     --allow-program-drift) ALLOW_PROGRAM_DRIFT=1 ;;
-    --require-source-program) REQUIRE_SOURCE_PROGRAM=1 ;;
+    --require-source-program) REQUIRE_SOURCE_PROGRAM=1 ;;  # now the default; kept for scripts
     --update) DO_UPDATE=1 ;;
     --update-source) UPDATE_SOURCE=1 ;;
     --force) FORCE=1 ;;
@@ -119,6 +119,8 @@ if [ "$REQUIRE_SOURCE_PROGRAM" = 1 ] && [ "$STRICT_BYTES" = 1 ]; then
   echo "--strict-bytes already demands the page images be identical; --require-source-program is redundant." >&2
   exit 2
 fi
+# (--require-source-program is accepted but no longer needed: the source's
+# program bytes are gated by default now that shell.nix pins the toolchain.)
 if [ "$DO_UPDATE" = 1 ] && [ "$STRICT_BYTES" = 1 ]; then
   echo "--update writes the rebuilt binaries; --strict-bytes only checks them. Pick one." >&2
   exit 2
@@ -179,6 +181,10 @@ if [ "$BUILD_SOURCE" = 1 ]; then
   # 2.37).  Probe the linker once and drop the flag when it is not accepted, so
   # an old-but-correct toolchain is not reported as a build failure.
   LDFLAGS=$(grep -hv '^#' "$EX/source/ldflags.txt")
+  CFLAGS=
+  if [ -f "$EX/source/cflags.txt" ]; then
+    CFLAGS=$(grep -hv '^#' "$EX/source/cflags.txt")
+  fi
   RWX_FLAG='-Wl,--no-warn-rwx-segments'
   if printf '%s\n' "$LDFLAGS" | grep -q -- "$RWX_FLAG"; then
     printf 'int main(void) { return 0; }\n' > "$OUT/linkprobe.c"
@@ -190,7 +196,7 @@ if [ "$BUILD_SOURCE" = 1 ]; then
   fi
   # shellcheck disable=SC2086
   ( cd "$EX/source" && "$CC" -std=gnu17 -march=rv64imafd -Os -static \
-      -nostartfiles -fno-builtin -fno-strict-aliasing $LDFLAGS \
+      -nostartfiles -fno-builtin -fno-strict-aliasing $CFLAGS $LDFLAGS \
       ../../crt/_start.S program.c -o "$ROOT/$OUT/program.src" )
 fi
 
@@ -213,21 +219,14 @@ for pair in "src:source" "tgt:target"; do
   tag=${pair%%:*}; kind=${pair##*:}
   [ "$kind" = source ] && [ "$BUILD_SOURCE" = 0 ] && continue
   [ "$kind" = target ] && [ "$BUILD_TARGET" = 0 ] && continue
-  # In read-only mode the target's program bytes are required (CI pins its
-  # compiler family); the source's are not, because the committed binary is one
-  # specific GNU musl build and nixpkgs' cross GCC is whatever the channel has.
+  # In read-only mode BOTH sides' program bytes are required: `shell.nix` pins
+  # the toolchain that reproduces them.  `--allow-program-drift` drops the
+  # check, and `--strict-bytes` replaces it with page-image equality.
   # `--update` asks for the program check on both sides, to learn whether a
   # side actually changed.
   require_program=0
-  if [ "$STRICT_BYTES" = 0 ]; then
-    if [ "$DO_UPDATE" = 1 ]; then
-      require_program=1
-    elif [ "$ALLOW_PROGRAM_DRIFT" = 0 ] && [ "$kind" = target ]; then
-      require_program=1
-    elif [ "$ALLOW_PROGRAM_DRIFT" = 0 ] && [ "$REQUIRE_SOURCE_PROGRAM" = 1 ] \
-         && [ "$kind" = source ]; then
-      require_program=1
-    fi
+  if [ "$STRICT_BYTES" = 0 ] && [ "$ALLOW_PROGRAM_DRIFT" = 0 ]; then
+    require_program=1
   fi
   args=(--rebuilt "$OUT/program.$tag" --committed "$EX/program.$tag.elf" --kind "$kind")
   [ "$require_program" = 1 ] && args+=(--require-program-identical)
