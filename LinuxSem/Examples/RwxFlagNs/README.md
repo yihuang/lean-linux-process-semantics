@@ -54,19 +54,31 @@ zig build-exe target/program.zig $(grep -hv '^#' target/flags.txt) \
 ```
 
 then compares each rebuilt file with its committed counterpart **as an ELF, at
-the loader level** (`tools/e2e/compare_elfs.py`): the page-rounded segment
-extents and permissions, the entry point, `e_phnum`/`e_phentsize` and the
-AT_PHDR the kernel derives, then the bytes — per PT_LOAD the page image and the
-segment's own **file extent** (`[p_vaddr, p_vaddr + p_filesz)`), i.e. the
-program's own bytes separately from the page slack the kernel maps around them.
+the loader level** (`tools/e2e/compare_elfs.py`).  Three checks, in order:
+
+1. **Layout** — the page-rounded segment extents and permissions, the entry
+   point, `e_phnum`/`e_phentsize` and the AT_PHDR the kernel derives.  Required
+   for both sides.
+2. **Program bytes** — each PT_LOAD's own file extent
+   (`[p_vaddr, p_vaddr + p_filesz)`), with the ELF header's section-table
+   bookkeeping (`e_shoff`/`e_shentsize`/`e_shnum`/`e_shstrndx`) masked.  The
+   section table is not loaded, not executed and never read by the program, and
+   no two toolchains put it in the same place; the code and data a program runs
+   on must not move.  Required for the **target** always, and for the source
+   when it is built by the documented GNU compiler.
+3. **Page images** — only with `--strict-bytes`: the bytes the kernel maps,
+   page slack included.  That is exact reproduction and needs the upstream
+   toolchains.
+
+`--allow-program-drift` drops check 2 (for trying a different toolchain).
 
 Measured on the machine this port was made on (zig 0.14.1; no
 `riscv64-linux-musl-gcc`, so the source used the `zig cc` fallback):
 
-| image | layout | program's own bytes |
-| --- | --- | --- |
-| target (Zig) | reproduced exactly | the `.text` extent `[0x1001190, 0x10011a8)` and the data byte `[0x10021a8, 0x10021a9)` are **byte-identical**; the only differing byte inside any LOAD file extent is `0x1000028`, the first byte of `e_shoff` (the section-header table pointer — a zig-version difference, and the section table itself is page slack this program never reads) |
-| source (C) | reproduced exactly | 62 bytes differ across `[0x10028, 0x100e8]`: the fallback compiler is clang, the committed snapshot is the GNU build.  Install `riscv64-linux-musl-gcc` to reproduce it; that is the toolchain the snapshot is pinned to |
+| image | layout | program bytes | script |
+| --- | --- | --- | --- |
+| target (Zig) | reproduced | **identical** after masking `e_shoff` (the only differing byte in any file extent is `0x1000028`, the first byte of that pointer); `.text [0x1001190, 0x10011a8)` and the data byte `[0x10021a8, 0x10021a9)` are byte-identical | exit 0 |
+| source (C) | reproduced | 60 bytes differ across `[0x10028, 0x100e4]`: the fallback compiler is clang, the committed binary is the GNU build.  Install `riscv64-linux-musl-gcc` to gate/reproduce it | exit 0, WARN |
 
 So the committed target snapshot is the current compiler's output up to the
 ELF section table, and the committed source snapshot is the upstream GNU
@@ -90,6 +102,20 @@ and compares.  Re-baselining an image means copying a rebuilt binary over
 `program.*.elf` and re-checking the proof — the script's per-segment report says
 exactly which bytes moved, and the modules' `decide` checks fail if the ELF's
 layout, entry, phdr record or entry bytes are not the ones the proof expects.
+
+## CI
+
+`.github/workflows/ci.yml` has two jobs, one per direction of the pipeline:
+
+- **`build`** — `scripts/check.sh`.  RwxFlagNs is in the root module, so this
+  runs `embedElf%` over the committed ELFs and typechecks the proof stated over
+  those images (the binaries → Lean direction).
+- **`e2e`** — installs zig 0.14.1 (pinned by checksum) and runs
+  `tools/e2e/rwx_flag_ns.sh` (the sources → committed binaries direction).
+  Layout drift fails for both sides; a changed target program fails too; the
+  source's compiler drift is a warning because the GNU musl compiler is not on
+  the runner.  The committed binaries are never rewritten by CI — the script
+  builds into `.lake/e2e/rwx/` and compares.
 
 ## Why the image is page-rounded
 

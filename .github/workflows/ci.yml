@@ -21,3 +21,40 @@ jobs:
 
       - name: Build decoder CLI
         run: lake build decoder
+
+  # The `build` job also checks the binaries → Lean direction: RwxFlagNs is in
+  # the root module, so `scripts/check.sh`'s `lake build` runs `embedElf%` over
+  # the committed ELFs and typechecks the proof stated about those images.
+  # This job checks the other direction — sources → committed binaries.
+  e2e:
+    name: e2e (sources to committed ELF images)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # zig builds the RwxFlagNs target, and stands in for the GNU
+      # riscv64-linux-musl-gcc on the C side when that is not installed (see
+      # tools/e2e/rwx_flag_ns.sh).  Pinned; the checksum is the one
+      # https://ziglang.org/download/index.json publishes for this tarball.
+      - name: Install zig 0.14.1
+        run: |
+          set -euo pipefail
+          curl -sSfL "https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz" -o /tmp/zig.tar.xz
+          echo "24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c  /tmp/zig.tar.xz" | sha256sum -c -
+          mkdir -p "$HOME/zig"
+          tar -xJf /tmp/zig.tar.xz -C "$HOME/zig" --strip-components=1
+          echo "$HOME/zig" >> "$GITHUB_PATH"
+
+      - name: zig version
+        run: zig version
+
+      # Rebuilds both programs from source and compares each with its committed
+      # ELF at the loader level (tools/e2e/compare_elfs.py): segment extents and
+      # permissions, entry point, derived AT_PHDR, and the bytes each PT_LOAD
+      # takes from the file.  Layout drift fails for both sides; the target's
+      # program bytes are also required to match (the section header table is
+      # masked: the loader never reads it).  The source's program bytes are
+      # gated only when it is built by the GNU musl compiler; with the `zig cc`
+      # fallback its byte-level drift is a warning, and the layout gate stands.
+      - name: Rebuild and compare the committed ELF images
+        run: bash tools/e2e/rwx_flag_ns.sh

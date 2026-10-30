@@ -24,8 +24,18 @@ What is compared, and why exactly this:
   identically even though the ELF section table (never read by the program)
   moved.
 
-Exit codes: 0 identical, 2 layout identical but bytes differ, 1 layout differs
-(or a file cannot be read).
+  `--require-program-identical` adds a third check: the bytes each PT_LOAD
+  takes from its own FILE image must be identical, after masking the ELF
+  header's section-table bookkeeping (`e_shoff`/`e_shentsize`/`e_shnum`/
+  `e_shstrndx`).  That is the check a CI gate can make across compilers: the
+  section header table is not loaded, not executed and not read by the
+  program, and no two toolchains agree on where it goes — while the code and
+  data a program runs on must not move.  The page SLACK around a segment is
+  deliberately not part of this check for the same reason.
+
+Exit codes: 0 identical, 2 layout identical but bytes differ, 3 layout
+identical and bytes differ but `--require-program-identical` was given and the
+program bytes differ, 1 layout differs (or a file cannot be read).
 """
 import argparse
 import struct
@@ -33,6 +43,11 @@ import sys
 
 PAGE = 4096
 PT_LOAD = 1
+
+# ELF64 header fields that point at the section header table (or describe it).
+# Zeroed by `--require-program-identical`: the table is not part of the image a
+# program runs on, and its placement is a toolchain detail.
+SHDR_FIELDS = ((0x28, 8), (0x3a, 2), (0x3c, 2), (0x3e, 2))
 
 
 def parse(path):
@@ -102,6 +117,9 @@ def main():
     ap.add_argument('--rebuilt', required=True)
     ap.add_argument('--committed', required=True)
     ap.add_argument('--kind', required=True)
+    ap.add_argument('--require-program-identical', action='store_true',
+                    help="also require each PT_LOAD's own file-extent bytes to "
+                         "match, ignoring the ELF header's section-table fields")
     a = ap.parse_args()
 
     ra, ca = parse(a.rebuilt), parse(a.committed)
@@ -141,6 +159,31 @@ def main():
         bad = [k for k in range(min(len(ext_a), len(ext_c))) if ext_a[k] != ext_c[k]]
         verdict = 'IDENTICAL' if not bad else f"differs in {len(bad)} byte(s); first at {hex(sca['va'] + bad[0])}"
         print(f"  {a.kind}: segment {i}: file extent [{hex(sca['va'])}, {hex(sca['va'] + sca['fs'])}) {verdict}")
+    if a.require_program_identical:
+        def masked(elf):
+            d = bytearray(elf['data'])
+            for off, n in SHDR_FIELDS:
+                for i in range(off, min(off + n, len(d))):
+                    d[i] = 0
+            return d
+        ma, mc = masked(ra), masked(ca)
+        bad_program = False
+        for i, (sra, sca) in enumerate(zip(ra['loads'], ca['loads'])):
+            ea = [ma[sra['off'] + k] for k in range(sra['fs'])]
+            ec = [mc[sca['off'] + k] for k in range(sca['fs'])]
+            bad = [k for k in range(min(len(ea), len(ec))) if ea[k] != ec[k]]
+            if len(ea) != len(ec) or bad:
+                bad_program = True
+                where = (f"first at {hex(sca['va'] + bad[0])}" if bad
+                         else f"length {len(ea)} vs {len(ec)}")
+                print(f"  {a.kind}: segment {i}: PROGRAM BYTES DIFFER "
+                      f"(file extent [{hex(sca['va'])}, {hex(sca['va'] + sca['fs'])}), {where})",
+                      file=sys.stderr)
+        if bad_program:
+            return 3
+        print(f"  {a.kind}: program bytes identical (section-table bookkeeping masked)")
+        # in this mode the page slack is informational: the program is the same
+        return 0
     return 0 if identical else 2
 
 

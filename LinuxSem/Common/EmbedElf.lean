@@ -6,11 +6,13 @@
   `init_pc` and `phdrs` are the ones the kernel would set up for that file.
   A module can then be one line per binary:
 
-      def LoopMemImage_image : MemImage := embedElf% "data/loop.elf"
+      def SourceMemImage_image : MemImage := embedElf% "program.src.elf"
 
   and the C/Zig → ELF → Lean → proof pipeline has **no generated Lean file and
   no extracted payload** in it: the ELF is the artifact, and the image is read
-  from it when the module is elaborated.
+  from it when the module is elaborated.  `Examples/RwxFlagNs` is the worked
+  example: its two `MemImage` modules are one `embedElf%` each, and the proof
+  is stated over them.
 
   ** What is checked, and where
 
@@ -25,19 +27,20 @@
 
   The build log gets the table for free, e.g.
 
-      embedElf% data/loop.elf: entry 0x10000, AT_PHDR 0xf040
-        load 0xf000 + 0x2000 (r-x): file 0x0 + 0x1028, p_memsz 0x1028
+      embedElf% program.src.elf: entry 0x10078, AT_PHDR 0x10040
+        load 0x10000 + 0x1000 (rwx): file 0x0 + 0xe5, p_memsz 0xf0
 
   which is the readable part a generated snapshot module used to carry.
 
   This is elaboration-time IO, so Lean's build graph does not see the ELF: a
   binary replaced on its own does not invalidate the module that embedded it
   (`include_str` has the same caveat; `input_file` + `extraDepTargets` only
-  order the target, they do not invalidate modules).  The pipeline therefore
-  deletes the embedding module's artifacts before building it
-  (`tools/e2e/build.sh`), and the proof files' `decide` facts (`TF_*`/`TD_*`
-  on the entry words) fail on a binary that no longer matches — as soon as
-  the module is actually rebuilt.
+  order the target, they do not invalidate modules).  Replacing a committed
+  binary by hand therefore needs the module's artifacts removed first —
+  `Examples/RwxFlagNs/README.md` has the exact `rm` line — and the modules'
+  own `decide` checks (layout, entry/phdr record, entry words) fail on a
+  binary that is not the one the proof is written against, as soon as the
+  module is actually rebuilt.
 -/
 import Lean
 import LinuxSem.Common.ElfImage

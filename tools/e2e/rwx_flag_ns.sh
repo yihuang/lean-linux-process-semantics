@@ -18,17 +18,24 @@
 #
 # WHAT THE COMPARISON MEANS
 #
-#   layout + bytes identical           -> reproduced exactly (exit 0)
-#   layout identical, bytes differ     -> right recipe, same image shape, but
-#                                         this host's compiler emitted a
-#                                         different program / section table;
-#                                         the committed binary is pinned to the
-#                                         upstream build (exit 0, WARN)
-#   layout differs                     -> the recipe or the binary is wrong
-#                                         (exit 1)
+#   layout identical, program bytes identical   -> exit 0 (the image is the same
+#       program; only the section header table, which the loader never reads and
+#       the program never touches, moved)
+#   layout identical, page images identical     -> exit 0 (exact reproduction)
+#   layout identical, program bytes differ      -> FAIL, unless the side was
+#       built by the FALLBACK compiler: the committed source binary comes from
+#       GNU riscv64-linux-musl-gcc, and `zig cc` (clang) emits a different
+#       program.  Then the layout is still gated and the drift is a WARN.
+#   layout differs                              -> FAIL (the recipe or the
+#       committed binary is wrong)
 #
-# `--strict-bytes` turns the WARN case into a failure, which is what a
-# reproducibility gate should do on a host with the upstream toolchain.
+# The "program bytes" check masks the ELF header's section-table bookkeeping
+# (`e_shoff`/`e_shentsize`/`e_shnum`/`e_shstrndx`) and looks only at each
+# PT_LOAD's own file extent: that is what a CI gate can hold across compiler
+# versions.  `--strict-bytes` instead demands the page images be byte-identical
+# (what a host with the upstream toolchains can achieve), and
+# `--allow-program-drift` drops the program check entirely (for trying a
+# different toolchain).
 #
 # THE SOURCE COMPILER.  The committed source binary is a GNU
 # riscv64-linux-musl-gcc build (see source/ldflags.txt and the `_start.S` in
@@ -47,7 +54,14 @@ mkdir -p "$OUT"
 ROOT="$(pwd)"
 
 STRICT_BYTES=0
-[ "${1:-}" = "--strict-bytes" ] && STRICT_BYTES=1
+ALLOW_PROGRAM_DRIFT=0
+for arg in "$@"; do
+  case "$arg" in
+    --strict-bytes) STRICT_BYTES=1 ;;
+    --allow-program-drift) ALLOW_PROGRAM_DRIFT=1 ;;
+    *) echo "usage: $0 [--strict-bytes | --allow-program-drift]" >&2; exit 2 ;;
+  esac
+done
 
 ZIG="${ZIG:-zig}"
 SOURCE_CC="${SOURCE_CC:-riscv64-linux-musl-gcc}"
@@ -88,23 +102,46 @@ echo "== 3/3  compare the rebuilt binaries with the committed ones (loader level
 drift=0
 for pair in "src:source" "tgt:target"; do
   tag=${pair%%:*}; kind=${pair##*:}
+  # Program identity is required for the target (same compiler family), and
+  # for the source when it was built by the documented GNU compiler.  With the
+  # `zig cc` fallback the source program is known to differ (clang vs gcc), so
+  # only its layout is gated there.
+  require_program=0
+  if [ "$STRICT_BYTES" = 0 ] && [ "$ALLOW_PROGRAM_DRIFT" = 0 ]; then
+    if [ "$kind" = target ] || [ "$SRC_TOOLCHAIN" = upstream ]; then
+      require_program=1
+    fi
+  fi
+  args=(--rebuilt "$OUT/program.$tag" --committed "$EX/program.$tag.elf" --kind "$kind")
+  [ "$require_program" = 1 ] && args+=(--require-program-identical)
+
   rc=0
-  python3 tools/e2e/compare_elfs.py \
-      --rebuilt "$OUT/program.$tag" --committed "$EX/program.$tag.elf" \
-      --kind "$kind" || rc=$?
+  python3 tools/e2e/compare_elfs.py "${args[@]}" || rc=$?
   case $rc in
-    0) echo "  $kind: committed binary REPRODUCED exactly" ;;
+    0)
+      if [ "$STRICT_BYTES" = 1 ]; then
+        echo "  $kind: committed binary REPRODUCED exactly"
+      elif [ "$require_program" = 1 ]; then
+        echo "  $kind: layout + program bytes REPRODUCED (section table ignored)"
+      else
+        echo "  $kind: layout REPRODUCED (byte-level drift reported above)"
+      fi ;;
     2)
       drift=1
       if [ "$kind" = source ] && [ "$SRC_TOOLCHAIN" = fallback ]; then
         warn "source: the committed binary is the GNU riscv64-linux-musl-gcc"
         warn "build; this host used zig cc (clang), so the instructions differ."
         warn "Install riscv64-linux-musl-gcc (or set SOURCE_CC) to reproduce it."
+        warn "Layout is verified; the program bytes are not gated on this host."
+      elif [ "$STRICT_BYTES" = 1 ]; then
+        warn "$kind: page images differ (--strict-bytes measures exactly that;"
+        warn "only the upstream toolchains reproduce them)."
       else
-        warn "$kind: same image LAYOUT and a different section table / bytes;"
-        warn "see the per-segment lines above (the program's own file extents"
-        warn "are often identical while the page slack is not)."
+        warn "$kind: same image LAYOUT and different page bytes; see the"
+        warn "per-segment lines above."
       fi ;;
+    3)
+      fail "$kind: the rebuilt binary is a DIFFERENT PROGRAM from the committed one (see above); re-baseline it or pass --allow-program-drift" ;;
     *) fail "$kind: the rebuilt binary has a DIFFERENT LAYOUT from the committed one" ;;
   esac
 done
@@ -113,4 +150,8 @@ if [ "$drift" = 1 ] && [ "$STRICT_BYTES" = 1 ]; then
   fail "byte-identical reproduction was requested (--strict-bytes) and failed"
 fi
 
-echo "OK (layout verified; see WARN lines above for byte-level toolchain drift)"
+if [ "$drift" = 1 ]; then
+  echo "OK (layout verified; see WARN lines above for byte-level toolchain drift)"
+else
+  echo "OK"
+fi

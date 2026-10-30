@@ -1,16 +1,15 @@
 /-
   * Common/ElfImage — parse an ELF64 (riscv64) into the model's page image
 
-  The pure half of the snapshot pipeline: bytes in, the `Segment`s the kernel
-  would map plus the program-header address it would publish, or the reason
-  the file cannot be snapshotted.  No IO — the two callers own that:
+  The pure half of the embedding pipeline: bytes in, the `Segment`s the kernel
+  would map plus the program-header address it would publish, or the reason the
+  file cannot be snapshotted.  No IO — `Common/EmbedElf`'s `embedElf% "file"`
+  owns the read and elaborates the `MemImage` at elaboration time, so a module
+  can say
 
-  - `Common/EmbedElf`'s `embedElf% "file"` elaborates a `MemImage` from an ELF
-    at elaboration time, so a module can say
+      def SourceMemImage_image : MemImage := embedElf% "program.src.elf"
 
-        def LoopMemImage_image : MemImage := embedElf% "data/loop.elf"
-
-    and the C → ELF → Lean → proof pipeline has no generated file in it;
+  and the source → ELF → Lean → proof pipeline has no generated file in it;
 
   ## Why the byte computation is not a dump
 
