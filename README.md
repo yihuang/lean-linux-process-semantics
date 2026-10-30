@@ -61,7 +61,5 @@ first column is the name `scripts/AxiomAudit.lean` pins.
 
 ## Documentation
 
-- `NOTES.md` — Lean 4.31 tactics, reduction behaviour, and build latency, with
-  the measurements behind each entry. Read it before fighting a proof.
 - `AGENTS.md` — the working conventions (one module per file, comments are part
   of the artifact, no proof holes, verify with `lake env lean`).

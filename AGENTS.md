@@ -1,8 +1,6 @@
 # Working conventions (for humans and agents)
 
-Read [README.md](README.md) for the layout, and [NOTES.md](NOTES.md) for the
-Lean 4 tactics, reduction behaviour, and build latency this tree has had to work
-around.
+Read [README.md](README.md) for the layout.
 
 ## Ground rules
 

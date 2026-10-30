@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "== lake build (library + tests) =="
+echo "== lake build (library, tests, decoder) =="
 lake build
 
 echo "== no escape hatches in the library =="
@@ -26,9 +26,6 @@ if printf '%s\n' "$audit" | grep -q "sorryAx"; then
   echo "a checked theorem depends on sorryAx" >&2
   exit 1
 fi
-
-echo "== decoder executable =="
-lake build decoder
 
 echo "== decoder smoke test =="
 out=$(printf '0x00000013\n0x8082\n' | ./.lake/build/bin/decoder)

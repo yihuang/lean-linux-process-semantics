@@ -388,7 +388,7 @@ example :
       (.ok (mkEffect (errno_ret EINVAL) [] []) demoModel []) := by
   simp [getdents64_spec, getModelSpec, bind_getModel, fd_lookup, demoFds,
     demoModel, m_fds, mkModel, getdents64_no_room, getdents64_ctx_count,
-    dirent64_min_reclen, sint32, abi_low32, alt, err_ret, ret_only, pure]
+    dirent64_min_reclen, sint32, alt, err_ret, ret_only, pure]
 
 /-- …AND -ENOENT IS ADMISSIBLE FOR THE SAME CALL: `iterate_dir` answers
     it for a removed directory before `filldir64` ever runs, which is
@@ -401,7 +401,7 @@ example :
       (.ok (mkEffect (errno_ret ENOENT) [] []) demoModel []) := by
   simp [getdents64_spec, getModelSpec, bind_getModel, fd_lookup, demoFds,
     demoModel, m_fds, mkModel, getdents64_no_room, getdents64_ctx_count,
-    dirent64_min_reclen, sint32, abi_low32, err_ret, ret_only]
+    dirent64_min_reclen, sint32, err_ret, ret_only]
   refine alt_l _ _ _ _ _ ?_
   exact bind_ok _ _ demoInput demoModel ENOENT demoModel [] _ demoModel []
     (choose_ok _ ENOENT demoInput demoModel (by decide)) rfl
@@ -411,7 +411,7 @@ example :
 example : getdents64_spec 2 24 demoInput demoModel .unmodeled := by
   simp [getdents64_spec, getModelSpec, bind_getModel, fd_lookup, demoFds,
     demoModel, m_fds, mkModel, getdents64_no_room, getdents64_ctx_count,
-    dirent64_min_reclen, sint32, abi_low32, unmodeled, err_ret, ret_only]
+    dirent64_min_reclen, sint32, unmodeled, err_ret, ret_only]
 
 /-! The four errnos really are the kernel's numbers in the return word —
     the encoding every arm above hands back. -/

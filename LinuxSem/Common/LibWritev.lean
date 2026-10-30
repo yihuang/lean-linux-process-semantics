@@ -47,84 +47,11 @@
 
   (1) NAMES.  `Z` is `Int`, `N`/`nat` are
       `Nat`, `word` is `BitVec 64` and `byte` is `BitVec 8`.
-  (2) MISSING MODULES.  None of those is in this tree
-      yet, and the missing pieces are not only proofs but DEFINITIONS:
-      * the executable checker `check_syscall` / `CheckOk` / `CheckReject` /
-        `check_writev` and its soundness/completeness lemmas
-        (`check_syscall_ok_iff`, `check_syscall_err_iff`) — the whole
-        `Checks/` layer, 65k lines, an explicit non-goal for now
-;
-      * the shape algebra `TSet` / `t_eq` / `t_emit` / `t_alt` / `wr_index` /
-        `wr_full` / `t_write_ch` / `t_alt_wall` / `realizes` / `node_ok`
-        (`Common/ShapeAlg`);
-      * the overlay-read layer `rdn` / `seg_rom` (`Common/PropExec`) and its
-        bridges `read_bytes_map_read_byte` (`Common/CatSim`),
-        `ms_read_bytes_rdn` (`Common/CatExec`), `le_word_v` (`PropExec`);
-      * the count/`Int` kit `u64_range`, `u64_lit` (`Common/PropExec`).
-      So that every part of THIS file that does not need the checker can still
-      be stated and typechecked, everything this file uses from those modules
-      is reproduced in the delimited "PREREQUISITES" sections below: faithful
-      copies of exactly the definitions and lemmas, each annotated with its
-       home, in this file's namespace so they cannot collide with the
-      real modules when those land.
-      SOME OF THOSE MODULES HAVE SINCE LANDED and the copies are now
-      redundant.  Mechanical replacement, when the integrator wires this file
-      into the root module:
-
-        this file                         real module (already in the tree)
-        --------------------------------  ---------------------------------
-        `seg_rom`, `rdn`, `rdn_length`,   `Common/PropExec.lean`
-        `le_word_v`, `u64_range`
-        `bytes_le_to_Z_8`                 `Common/PropExec.lean` is expected
-                                          to grow it (it is currently proved
-                                          from the `BvBase` byte recursion
-                                          here, like `Sys/Uapi.lean` does)
-        `read_bytes_map_read_byte`        `Common/CatSim.lean`
-        `ms_read_bytes_rdn`               `Common/CatExec.lean`
-        `is_prefix_app_mono`              `Common/CatSim.lean`
-        `is_prefix_app_r`,                `Common/ShapeAlg.lean` (not yet
-        `is_prefix_app_split`,            stated; `AsanAcct.lean` likewise
-        `is_prefix_nil_r`                 copies `ShapeAlg.node_ok` verbatim)
-        `TSet`, `t_eq`, `t_emit`, `t_alt`, `Common/ShapeAlg.lean` (not yet
-        `t_nil`, `t_alt2`, `wr_index`,     stated)
-        `wr_full`, `t_write_ch`,
-        `t_emit_nil_eq`, `t_alt_wall`,
-        `node_ok`, `realizes`,
-        `realizes_nonempty`
-      The two declarations whose STATEMENTS mention the shape algebra
-      (`t_alt_wall_nat`, `rz_wall`) must be re-stated against
-      `Common.ShapeAlg`'s `t_emit`/`t_alt`/`t_eq`/`realizes` at that point:
-      their proofs are the ones below, unchanged.
-  (3) EIGHT OF NINE NOW PROVED; ONE STILL DEFERRED.  When this file was
-      first stated the executable checker (`Checks/ExecutableSpecs`,
-      `check_syscall`, `Checks.Sys.Fs.ReadWrite.check_writev`,
-      `check_syscall_ok_iff` / `check_syscall_err_iff`) did not exist and the
-      nine declarations below could not even be stated.  It has since
-      landed, so eight of the nine are proved here AT the
-      statements -- `check_syscall_writev`, `writev_check`,
-      `rz_writev_pending`, `rz_writev2`, `rz_writev1`, `rz_writev2_wall`,
-      `rz_writev1_wall`, `rz_writev2_ch` -- on top of two new prerequisite
-      blocks: PREREQUISITES (C) below (the slice of `Common/AgentNodes`,
-      `Common/Nodes` and `Common/ShapeAlg` those proofs need) and
-      `Common/CatSim`'s two `apply_effect` lemmas.
-      Only `rz_writev1_zero` -- the degenerate zero-total `writev(fd, [{b1,
-      0}], 1)` -- is still deferred; its exact statement is at the end of
-      this file.  It needs no new idea, only the single-descriptor import
-      reduction (`import_iovecs`'s `nr_segs == 1` short circuit at a
-      zero-length descriptor) and the `check_ret_only_copyins` inversion.
-      This file still has no proof holes and no escape hatches (AGENTS.md,
-      ground rule 3).
-  (4) WHAT WAS IMPORTED, AND WHAT IS STILL A COPY.  `Common/PropExec.lean`
-      and `Checks/ExecutableSpecs.lean` are now imported: the state
-      vocabulary `mkst`/`getr`/`regupd`/`v_addi`/`step_ecall` is
-      `PropExec`'s and `check_syscall` is `ExecutableSpecs`'s.
-      `Common/SpinAlg.lean` also holds a copy of the shape algebra, but its
-      `realizes` is SpinAlg's own inductive and PREREQUISITES (A)'s copy is
-      what every statement here (and in this file's consumers) names, so the
-      copies are KEPT unchanged.  The five primitives the new nodes need on
-      top of them -- `mkCfg`, `sstep_instr_inv`, `node_instr`, `rz_silent1`,
-      `rz_step` -- are copied into PREREQUISITES (C), each annotated with its
-       home.
+  (2) STILL DEFERRED.  Only `rz_writev1_zero`, the degenerate zero-total
+      `writev(fd, [{b1, 0}], 1)`.  Its exact statement is at the end of this
+      file.  It needs no new idea, only the single-descriptor import reduction
+      (`import_iovecs`'s `nr_segs == 1` short circuit at a zero-length
+      descriptor) and the `check_ret_only_copyins` inversion.
 -/
 import LinuxSem.LinuxProcessSem.BvBase
 import LinuxSem.LinuxProcessSem.MemImageType
@@ -137,6 +64,7 @@ import LinuxSem.LinuxProcessSem.Run
 import LinuxSem.Common.PropExec
 import LinuxSem.Checks.ExecutableSpecs
 import LinuxSem.Common.SharedFacts
+import LinuxSem.Common.AgentNodes
 
 set_option autoImplicit false
 
@@ -162,174 +90,22 @@ open LinuxSem.Checks.Sys.Fs.ReadWrite (check_writev)
 local instance libwritev_fx : LinuxSem.Common.PropExec.FPState :=
   LinuxSem.Common.PropExec.fx0
 
-/-! The `PropExec` state/instruction vocabulary `LibWritev` writes
-    `mkst`/`getr`/`regupd`/`v_addi`/`step_ecall` in.  The memory layer
-    (`seg_rom`, `rdn`) is this file's own copy, in PREREQUISITES (B), so it
-    is deliberately NOT opened here. -/
 open LinuxSem.Common.PropExec (mkst getr regupd v_addi step_ecall le_word_v
-  arg_reg_0 arg_reg_1 arg_reg_2 getr_nz)
+  arg_reg_0 arg_reg_1 arg_reg_2 getr_nz u64_range seg_rom rdn rdn_length)
+open LinuxSem.Common.SeqExec (bytes_le_to_Z_8)
+open LinuxSem.Common.CatSim (read_bytes_map_read_byte apply_effect_no_write
+  apply_effect_copyins_no_write)
+open LinuxSem.Common.CatExec (ms_read_bytes_aux_rdn ms_read_bytes_rdn)
+open LinuxSem.Common.ExitSim (sstep_instr_inv)
+open LinuxSem.Common.ShapeAlg (is_prefix_app_split is_prefix_nil_r TSet t_eq t_eq_refl
+  t_eq_sym t_eq_trans t_nil t_emit t_alt t_alt2 wr_index wr_full t_write_ch t_emit_nil_eq
+  t_alt_wall node_ok realizes realizes_nonempty mkCfg node_instr rz_silent1 rz_step)
+open LinuxSem.Common.Nodes (halt_ev sstep_of_check sstep_svc_inv)
+open LinuxSem.Common.FileSim (in_sysno_si in_mem_si in_arg0_si in_arg1_si in_arg2_si)
+open LinuxSem.Common.AgentNodes (epend step_ecall_epend epend_svc ms_gpr_epend0 ms_gpr_epend1
+  ms_gpr_epend2 ms_mem_epend ms_rom_epend adv_set_epend rz_sys)
 open LinuxSem.LinuxProcessSem.Sys.Uapi (mod_mul_256_of mod_mul_256)
 open LinuxSem.Common.SharedFacts
-
-/-! =========================================================================
-    PREREQUISITES (A) — the shape algebra, `Common/ShapeAlg`
-    =========================================================================
-
-    Not part of `LibWritev`: the slice of the shape algebra that
-    `LibWritev` consumes.  Delete this section when `Common/ShapeAlg.lean`
-    lands. -/
-
-/-! ## Prefix lemmas (`Common/ShapeAlg`, `Common/CatSim`) -/
-
-theorem is_prefix_app_split {A : Type} (l a b : List A)
-    (H : is_prefix b (l ++ a)) :
-    is_prefix b l ∨ ∃ b', b = l ++ b' ∧ is_prefix b' a := by
-  induction l generalizing b with
-  | nil => exact Or.inr ⟨b, rfl, H⟩
-  | cons x l ih =>
-    cases b with
-    | nil => exact Or.inl (is_prefix_nil _)
-    | cons y b =>
-      obtain ⟨rfl, H'⟩ := H
-      rcases ih b H' with Hp | ⟨b', rfl, Hp⟩
-      · exact Or.inl ⟨rfl, Hp⟩
-      · exact Or.inr ⟨b', rfl, Hp⟩
-
-theorem is_prefix_nil_r {A : Type} (a : List A) (H : is_prefix a []) : a = [] := by
-  cases a with
-  | nil => rfl
-  | cons _ _ => exact False.elim H
-
-/-! ## The shape algebra (`Common/ShapeAlg`, LAYER 1) -/
-
-/-- A shape.  Intended invariant (established for every shape a configuration
-    realizes, see `realizes_nonempty` / `realizes_pclosed`): nonempty and
-    prefix-closed. -/
-abbrev TSet : Type := List event → Prop
-
-/-- Extensional equality of shapes. -/
-def t_eq (T T' : TSet) : Prop := ∀ tr, T tr ↔ T' tr
-
-theorem t_eq_refl (T : TSet) : t_eq T T := fun _ => Iff.rfl
-
-theorem t_eq_sym (T T' : TSet) (H : t_eq T T') : t_eq T' T :=
-  fun tr => (H tr).symm
-
-theorem t_eq_trans (T1 T2 T3 : TSet) (H12 : t_eq T1 T2) (H23 : t_eq T2 T3) :
-    t_eq T1 T3 :=
-  fun tr => (H12 tr).trans (H23 tr)
-
-/-- The terminated shape: only the empty trace. -/
-def t_nil : TSet := fun tr => tr = []
-
-/-- Emit a fixed block of events, then continue as `T`.  The left disjunct is
-    what keeps the result prefix-closed: a run may be observed part-way
-    through the block. -/
-def t_emit (evs : List event) (T : TSet) : TSet :=
-  fun tr => is_prefix tr evs ∨ ∃ tr', tr = evs ++ tr' ∧ T tr'
-
-/-- Indexed nondeterministic choice. -/
-def t_alt {I : Type} (f : I → TSet) : TSet := fun tr => ∃ i, f i tr
-
-/-- Binary choice. -/
-def t_alt2 (A B : TSet) : TSet := fun tr => A tr ∨ B tr
-
-/-- The index type of a single channel write's resolutions: the delivered
-    length, any nonempty prefix of the buffer.  (For an empty buffer the type
-    is EMPTY — the model EFAULTs an empty readable prefix, so no realized
-    shape ever contains one.) -/
-def wr_index (buf : List byte) : Type := { n : Nat // 1 ≤ n ∧ n ≤ buf.length }
-
-/-- The full delivery, as a member of `wr_index`. -/
-def wr_full (buf : List byte) (Hnb : 1 ≤ buf.length) : wr_index buf :=
-  ⟨buf.length, Hnb, Nat.le_refl _⟩
-
-/-- A single `write(ch, ...)` of buffer `buf`: the environment delivers a
-    chosen nonempty prefix, then the continuation. -/
-def t_write_ch (ch : word) (buf : List byte) (T : TSet) : TSet :=
-  t_alt (fun i : wr_index buf => t_emit ((buf.take i.1).map (event.WriteEv ch)) T)
-
-/-- A shape prefixed by no events is that shape (given nonemptiness, which
-    every realized shape has). -/
-theorem t_emit_nil_eq (T : TSet) (H0 : T []) : t_eq (t_emit [] T) T := by
-  intro tr
-  unfold t_emit
-  constructor
-  · rintro (Hp | ⟨tr', rfl, HT⟩)
-    · rw [is_prefix_nil_r tr Hp]; exact H0
-    · simpa using HT
-  · intro HT
-    exact Or.inr ⟨tr, rfl, HT⟩
-
-/-- A single retry-loop write node collapses to one `t_emit` of the whole
-    buffer: the per-delivery alternatives denote the same set. -/
-theorem t_alt_wall (ch : word) (rest : List byte) (T : TSet)
-    (_HT : T []) (Hnb : 1 ≤ rest.length) :
-    t_eq (t_alt (fun i : wr_index rest =>
-            t_emit ((rest.take i.1).map (event.WriteEv ch))
-                   (t_emit ((rest.drop i.1).map (event.WriteEv ch)) T)))
-         (t_emit (rest.map (event.WriteEv ch)) T) := by
-  intro tr
-  constructor
-  · rintro ⟨⟨n, hn1, hn2⟩, Hi⟩
-    rcases Hi with Hp | ⟨tr1, rfl, Hi⟩
-    · refine Or.inl ?_
-      have hsplit : rest.map (event.WriteEv ch)
-          = (rest.take n).map (event.WriteEv ch) ++ (rest.drop n).map (event.WriteEv ch) := by
-        rw [← List.map_append, List.take_append_drop]
-      rw [hsplit]
-      exact is_prefix_app_r _ _ _ Hp
-    · rcases Hi with Hp | ⟨tr2, rfl, Ht⟩
-      · refine Or.inl ?_
-        have hsplit : rest.map (event.WriteEv ch)
-            = (rest.take n).map (event.WriteEv ch) ++ (rest.drop n).map (event.WriteEv ch) := by
-          rw [← List.map_append, List.take_append_drop]
-        rw [hsplit]
-        exact is_prefix_app_mono _ _ _ Hp
-      · refine Or.inr ⟨tr2, ?_, Ht⟩
-        simp only [← List.append_assoc, ← List.map_append, List.take_append_drop]
-  · rintro (Hp | ⟨tr', rfl, Ht⟩)
-    · refine ⟨wr_full rest Hnb, ?_⟩
-      simp only [wr_full, List.take_length]
-      exact Or.inl Hp
-    · refine ⟨wr_full rest Hnb, ?_⟩
-      simp only [wr_full, List.take_length, List.drop_length, List.map_nil]
-      exact Or.inr ⟨tr', rfl, Or.inr ⟨tr', rfl, Ht⟩⟩
-
-/-! ## Realization (`Common/ShapeAlg`, LAYER 2) -/
-
-/-- The syscall/step boundary interface.  A node at configuration `c` is
-    characterized by an index type `I` of RESOLUTIONS, the events each
-    resolution emits, and the successor configuration each resolution reaches.
-    `node_ok` says the set of admissible transitions is EXACTLY that — which in
-    particular rules out `SError`, and hence rules out both faults and
-    unmodeled configurations, at this node. -/
-def node_ok (segs : List Segment) (c : config) (I : Type)
-    (evs : I → List event) (nx : I → config) : Prop :=
-  (∀ i, sstep segs c (evs i) (.SNext (nx i))) ∧
-  (∀ e st, sstep segs c e st → ∃ i, e = evs i ∧ st = .SNext (nx i))
-
-/-- The one reachability relation. -/
-inductive realizes (segs : List Segment) : config → TSet → Prop where
-  | node {c : config} {I : Type} (evs : I → List event) (nx : I → config)
-      (T : I → TSet) (i0 : I)
-      (hnode : node_ok segs c I evs nx)
-      (hcont : ∀ i, realizes segs (nx i) (T i)) :
-      realizes segs c (t_alt (fun i => t_emit (evs i) (T i)))
-  | halt {c : config} (h : m_halted c.cfg_model ≠ none) :
-      realizes segs c t_nil
-  | conseq {c : config} {T T' : TSet}
-      (h : realizes segs c T) (heq : t_eq T T') :
-      realizes segs c T'
-
-/-- Every realized shape contains the empty trace. -/
-theorem realizes_nonempty (segs : List Segment) (c : config) (T : TSet)
-    (H : realizes segs c T) : T [] := by
-  induction H with
-  | node evs nx T i0 hnode hcont ih =>
-    exact ⟨i0, Or.inl (is_prefix_nil _)⟩
-  | halt h => rfl
-  | conseq h heq ih => exact (heq []).mp ih
 
 /-! =========================================================================
     LibWritev — image-independent prelude
@@ -377,40 +153,6 @@ theorem access_okb_of_le (b : word) (n : Int)
   rw [Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq]
   constructor <;> omega
 
-/-! =========================================================================
-    PREREQUISITES (B) — bytes and overlay reads
-    =========================================================================
-
-    Not part of `LibWritev`: the slice of `Common/PropExec`,
-    `Common/CatSim`, `Common/CatExec` and `BvBase` that `LibWritev`
-    consumes.  Delete this section when those modules land. -/
-
-/-! ## Little-endian byte round-trip (`Common/PropExec`, `BvBase`) -/
-
-/- `BvBase`'s general `bytes_le_to_Z_of_le_bytes` round trip
-   used to have no counterpart in `BvBase.lean`; it now does (proved at
-   the bottom of that file from the `Nat` byte recursion), so the reason
-   for keeping the 8-byte instance here is no longer absence: `LibWritev`
-   needs it over `bytes_le_to_Nat`, the form its `read_u64` decoding
-   consumes, and `BvBase` states that `Nat` round trip once
-   (`bytes_le_to_Nat_Z_to_le_bytes`) for every caller. -/
-
-/-- `PropExec.bytes_le_to_Z_8`: the 8 little-endian bytes of `v`
-    read back as `v`'s unsigned value — what turns the byte list a `read_u64`
-    decodes back into the word it came from. -/
-theorem bytes_le_to_Z_8 (v : word) :
-    bytes_le_to_Z (word_to_le_bytes 8 v) = (v.toNat : Int) := by
-  unfold bytes_le_to_Z word_to_le_bytes
-  rw [bytes_le_to_Nat_Z_to_le_bytes]
-  rw [show 8 * 8 = 64 by decide, Nat.mod_eq_of_lt v.isLt]
-
-/-! ## `Nat`/`Int` count kit (`Common/PropExec`) -/
-
-/-- `u64_range`: every word's unsigned value is below `2^64`. -/
-theorem u64_range (x : word) : (x.toNat : Int) < 2 ^ 64 := by
-  have := x.isLt
-  omega
-
 /-- `u64_lit`: a small literal's unsigned value is the literal. -/
 theorem u64_lit (z : Int) (h1 : 0 ≤ z) (h2 : z < 2 ^ 64) :
     (BitVec.ofInt 64 z).toNat = z.toNat := by
@@ -419,104 +161,6 @@ theorem u64_lit (z : Int) (h1 : 0 ≤ z) (h2 : z < 2 ^ 64) :
     rw [← show (2 : Int) ^ 64 = ((2 ^ 64 : Nat) : Int) from by decide]
     exact h2
   rw [Int.emod_eq_of_lt h1 h2']
-
-/-! ## Overlay reads (`Common/PropExec`) -/
-
-/-- The loaded segments as a read-only byte source. -/
-def seg_rom (segs : List Segment) : word → Option byte :=
-  fun addr =>
-    match memory_read segs addr 1 with
-    | some (b :: _) => some b
-    | _ => none
-
-/-- Read `n` bytes starting at `a`: each byte from the overlay `mem` if
-    present, else from the loaded segments; fail on any miss. -/
-def rdn (segs : List Segment) (mem : word → Option byte) (a : word) :
-    Nat → Option (List byte)
-  | 0 => some []
-  | n + 1 =>
-    match (match mem a with | some b => some b | none => seg_rom segs a) with
-    | some b =>
-      match rdn segs mem (a + 1) n with
-      | some rest => some (b :: rest)
-      | none => none
-    | none => none
-
-/-- `rdn` returns exactly the number of bytes it was asked for. -/
-theorem rdn_length (segs : List Segment) (mem : word → Option byte) (n : Nat) :
-    ∀ (a : word) (bs : List byte), rdn segs mem a n = some bs → bs.length = n := by
-  induction n with
-  | zero =>
-    intro a bs H
-    simp only [rdn, Option.some.injEq] at H
-    subst H; rfl
-  | succ n ih =>
-    intro a bs H
-    simp only [rdn] at H
-    split at H
-    · rename_i b hb
-      split at H
-      · rename_i rest hrest
-        simp only [Option.some.injEq] at H
-        subst H
-        simp only [List.length_cons, ih (a + 1) rest hrest]
-      · exact absurd H (by simp)
-    · exact absurd H (by simp)
-
-/-! ## Memory-read bridges (`Common/CatSim`, `Common/CatExec`) -/
-
-/-- `read_bytes_map` over `ms_read_byte` is `ms_read_bytes`. -/
-theorem read_bytes_map_read_byte (ms : machine_state) (a len : word) :
-    read_bytes_map (ms_read_byte ms) a len = ms_read_bytes ms a len := by
-  rw [read_bytes_map_eq]
-  unfold ms_read_bytes
-  have key : ∀ (k : Nat) (a : word),
-      read_bytes_aux (ms_read_byte ms) a k = ms_read_bytes_aux ms a k := by
-    intro k
-    induction k with
-    | zero => intro a; rfl
-    | succ k ih =>
-      intro a
-      simp only [read_bytes_aux, ms_read_bytes_aux]
-      rw [ih]
-      cases ms_read_byte ms a <;> rfl
-  exact key _ _
-
-/-- The same walk through `rdn`. -/
-theorem ms_read_bytes_aux_rdn (segs : List Segment) (ms : machine_state) (n : Nat) :
-    ∀ (addr : word), ms.ms_rom = seg_rom segs →
-      ms_read_bytes_aux ms addr n = rdn segs ms.ms_mem addr n := by
-  induction n with
-  | zero => intro addr _; rfl
-  | succ n ih =>
-    intro addr Hrom
-    have hbyte : ms_read_byte ms addr
-        = (match ms.ms_mem addr with | some b => some b | none => seg_rom segs addr) := by
-      unfold ms_read_byte
-      rw [Hrom]
-      rfl
-    cases hm : ms.ms_mem addr with
-    | some b =>
-      simp only [ms_read_bytes_aux, rdn, hbyte, hm]
-      exact congrArg (fun x => match x with
-        | some rest => some (b :: rest) | none => none) (ih (addr + 1) Hrom)
-    | none =>
-      simp only [ms_read_bytes_aux, rdn, hbyte, hm]
-      cases hr : memory_read segs addr 1 with
-      | none => simp only [seg_rom, hr]
-      | some l =>
-        cases l with
-        | nil => simp only [seg_rom, hr]
-        | cons b r =>
-          simp only [seg_rom, hr]
-          exact congrArg (fun x => match x with
-            | some rest => some (b :: rest) | none => none) (ih (addr + 1) Hrom)
-
-/-- `ms_read_bytes` is `rdn` over the machine's own overlay. -/
-theorem ms_read_bytes_rdn (segs : List Segment) (ms : machine_state)
-    (addr len : word) (Hrom : ms.ms_rom = seg_rom segs) :
-    ms_read_bytes ms addr len = rdn segs ms.ms_mem addr (word_to_nat len) :=
-  ms_read_bytes_aux_rdn segs ms (word_to_nat len) addr Hrom
 
 /-! =========================================================================
     The trace identity that makes short writes harmless
@@ -551,7 +195,7 @@ theorem rz_wall (segs : List Segment) (c : config) (ch : word) (bs : List byte)
       t_emit ((bs.take i.1).map (event.WriteEv ch))
              (t_emit ((bs.drop i.1).map (event.WriteEv ch)) K)))) :
     realizes segs c (t_emit (bs.map (event.WriteEv ch)) K) :=
-  realizes.conseq H (t_alt_wall ch bs K HK Hnb)
+  realizes.rz_conseq c _ _ H (t_alt_wall ch bs K HK Hnb)
 
 /-! =========================================================================
     The iovec layer (`Section WithSegs`)
@@ -788,239 +432,6 @@ theorem import_iovecs_of_array (ms : machine_state) (iovs : List (word × word))
 end WithSegs
 
 /-! =========================================================================
-    PREREQUISITES (C) — the pending-`ecall` state, `Common/AgentNodes`
-    =========================================================================
-
-    Not part of `LibWritev`: the slice of `Common/AgentNodes` that
-    `LibWritev` consumes, so that `rz_writev1`/`rz_writev2`/
-    `rz_writev1_zero` can be stated in the `mkst`/`getr` vocabulary the
-    per-binary walk proofs use.  `Common/AgentNodes.lean` is not in this
-    tree; delete this section when it lands. -/
-
-/-- A configuration from its two halves . -/
-abbrev mkCfg (ms : machine_state) (model : Model) : config := ⟨ms, model⟩
-
-/-- Every admissible transition out of a raw instruction step with an empty
-    lazy ledger is that step. -/
-theorem sstep_instr_inv (segs : List Segment) (ms : machine_state) (model : Model)
-    (ms' : machine_state) (evs : List event) (st : step_to)
-    (Hlazy : m_vm_lazy model = []) (Hsvc : ms.ms_svc_pending = none)
-    (Hstep : RiscvSemantics.step segs ms = .MachineOk ms')
-    (Hss : sstep segs (mkCfg ms model) evs st) :
-    evs = [] ∧ st = .SNext (mkCfg ms' model) := by
-  have hnl := mi_account_step_no_lazy segs ms model Hlazy
-  cases Hss with
-  | instr a b c d hh hsvc hacc =>
-    rw [hnl, Hstep] at hacc
-    obtain ⟨rfl, rfl⟩ := machine_result.MachineOk.inj hacc
-    exact ⟨rfl, rfl⟩
-  | instr_fault a b hh hsvc hacc => rw [hnl, Hstep] at hacc; simp at hacc
-  | instr_unmodeled a b hh hsvc hacc => rw [hnl, Hstep] at hacc; simp at hacc
-  | syscall a b c d e f g hh hsvc hspec hh' hmat => exact absurd hsvc (by simp [Hsvc])
-  | syscall_materialization_fault a b c d e f hh hsvc hspec hh' hmat =>
-      exact absurd hsvc (by simp [Hsvc])
-  | exit a b c d e f g hh hsvc hspec hh' hk => exact absurd hsvc (by simp [Hsvc])
-  | killed a b c d e f g hh hsvc hspec hk => exact absurd hsvc (by simp [Hsvc])
-  | syscall_unmodeled a b c hh hsvc hspec => exact absurd hsvc (by simp [Hsvc])
-
-/-- An ordinary instruction step is the `Unit`-indexed silent node.
- -/
-theorem node_instr (segs : List Segment) (ms : machine_state) (model : Model)
-    (ms' : machine_state) (Hh : m_halted model = none) (Hlazy : m_vm_lazy model = [])
-    (Hsvc : ms.ms_svc_pending = none)
-    (Hstep : RiscvSemantics.step segs ms = .MachineOk ms') :
-    node_ok segs (mkCfg ms model) Unit (fun _ => []) (fun _ => mkCfg ms' model) := by
-  constructor
-  · intro i
-    cases i
-    exact sstep.instr ms model ms' model Hh Hsvc
-      (by rw [mi_account_step_no_lazy segs ms model Hlazy, Hstep])
-  · intro e st Hss
-    obtain ⟨he, hst⟩ := sstep_instr_inv segs ms model ms' e st Hlazy Hsvc Hstep Hss
-    exact ⟨(), he, hst⟩
-
-/-- A silent `Unit`-indexed node collapses to its continuation.   -/
-theorem rz_silent1 (segs : List Segment) (c c' : config) (T : TSet)
-    (Hnode : node_ok segs c Unit (fun _ => []) (fun _ => c'))
-    (Hc : realizes segs c' T) : realizes segs c T := by
-  have h0 : T [] := realizes_nonempty segs c' T Hc
-  refine realizes.conseq (c := c) (T := t_alt (fun _ : Unit => t_emit [] T)) ?_ ?_
-  · exact realizes.node (fun _ => []) (fun _ => c') (fun _ => T) () Hnode
-      (fun i => by cases i; exact Hc)
-  · intro tr
-    constructor
-    · rintro ⟨i, Hi⟩
-      cases i
-      exact (t_emit_nil_eq T h0 tr).1 Hi
-    · intro H
-      exact ⟨(), (t_emit_nil_eq T h0 tr).2 H⟩
-
-/-- Instruction steps. -/
-theorem rz_step (segs : List Segment) (ms : machine_state) (model : Model)
-    (ms' : machine_state) (T : TSet)
-    (Hh : m_halted model = none) (Hlazy : m_vm_lazy model = [])
-    (Hsvc : ms.ms_svc_pending = none)
-    (Hstep : RiscvSemantics.step segs ms = .MachineOk ms')
-    (Hc : realizes segs (mkCfg ms' model) T) : realizes segs (mkCfg ms model) T :=
-  rz_silent1 segs _ _ T (node_instr segs ms model ms' Hh Hlazy Hsvc Hstep) Hc
-
-/-- The machine state sitting ON the `ecall` with `ms_svc_pending = some x8`,
-    i.e. `RiscvSemantics.step` of `mkst regs pc mem rom` at an `ecall`
-    (`step_ecall_epend`). -/
-def epend (regs : BvMap word) (pc : word) (mem rom : word → Option byte)
-    (x8 : word) : machine_state :=
-  { ms_regs := regs,
-    ms_fregs := (inferInstance : LinuxSem.Common.PropExec.FPState).fp_regs,
-    ms_pc_val := pc,
-    ms_svc_pending := some x8, ms_resv := none,
-    ms_fcsr := (inferInstance : LinuxSem.Common.PropExec.FPState).fp_csr,
-    ms_mem := mem, ms_rom := rom }
-
-/-- The `ecall` instruction step lands in `epend`. -/
-theorem step_ecall_epend (segs : List Segment) (regs : BvMap word) (pc : word)
-    (mem rom : word → Option byte) (w : BitVec 32)
-    (HF : fetch_word segs pc = some w) (HE : is_ecall w = true) :
-    RiscvSemantics.step segs (mkst regs pc mem rom)
-      = .MachineOk (epend regs pc mem rom (getr regs 17)) := by
-  rw [step_ecall segs regs pc mem rom w HF HE]
-  rfl
-
-theorem epend_svc (regs : BvMap word) (pc : word) (mem rom : word → Option byte)
-    (x8 : word) : (epend regs pc mem rom x8).ms_svc_pending = some x8 := rfl
-
-/-- The syscall-argument views of the pending state are the `getr` reads of
-    `a0`/`a1`/`a2`. -/
-theorem ms_gpr_epend0 (regs : BvMap word) (pc : word) (mem rom : word → Option byte)
-    (x8 : word) : ms_gpr (epend regs pc mem rom x8) 0 = getr regs 10 := by
-  show reg_get regs (BitVec.ofInt 5 (10 + ((0 : Nat) : Int))) = getr regs 10
-  rw [show BitVec.ofInt 5 (10 + ((0 : Nat) : Int)) = (10 : reg) from arg_reg_0]
-  unfold getr
-  rw [LinuxSem.Common.PropExec.bv_eqb_neq (10 : reg) 0 (by decide),
-    ite_eq_right (by simp)]
-
-theorem ms_gpr_epend1 (regs : BvMap word) (pc : word) (mem rom : word → Option byte)
-    (x8 : word) : ms_gpr (epend regs pc mem rom x8) 1 = getr regs 11 := by
-  show reg_get regs (BitVec.ofInt 5 (10 + ((1 : Nat) : Int))) = getr regs 11
-  rw [show BitVec.ofInt 5 (10 + ((1 : Nat) : Int)) = (11 : reg) from arg_reg_1]
-  unfold getr
-  rw [LinuxSem.Common.PropExec.bv_eqb_neq (11 : reg) 0 (by decide),
-    ite_eq_right (by simp)]
-
-theorem ms_gpr_epend2 (regs : BvMap word) (pc : word) (mem rom : word → Option byte)
-    (x8 : word) : ms_gpr (epend regs pc mem rom x8) 2 = getr regs 12 := by
-  show reg_get regs (BitVec.ofInt 5 (10 + ((2 : Nat) : Int))) = getr regs 12
-  rw [show BitVec.ofInt 5 (10 + ((2 : Nat) : Int)) = (12 : reg) from arg_reg_2]
-  unfold getr
-  rw [LinuxSem.Common.PropExec.bv_eqb_neq (12 : reg) 0 (by decide),
-    ite_eq_right (by simp)]
-
-theorem ms_mem_epend (regs : BvMap word) (pc : word) (mem rom : word → Option byte)
-    (x8 : word) : (epend regs pc mem rom x8).ms_mem = mem := rfl
-
-theorem ms_rom_epend (regs : BvMap word) (pc : word) (mem rom : word → Option byte)
-    (x8 : word) : (epend regs pc mem rom x8).ms_rom = rom := rfl
-
-/-- The post-syscall state of a return-only effect is the plain
-    return-value update. -/
-theorem adv_set_epend (regs : BvMap word) (pc : word) (mem rom : word → Option byte)
-    (x8 v : word) :
-    advance_past_svc (set_gpr0 (epend regs pc mem rom x8) v)
-      = mkst (regupd regs 10 v) (v_addi pc 4) mem rom := by
-  unfold set_gpr0 set_reg advance_past_svc epend mkst ms_pc regupd v_addi
-  rw [LinuxSem.Common.PropExec.bv_eqb_neq (10 : reg) 0 (by decide),
-    ite_eq_right (by simp : ¬ (false = true)), bv_add_Zform]
-  rw [show (BitVec.ofInt 64 4).toNat = 4 from by decide]
-  rfl
-
-/-- Enter the syscall node: the `ecall` instruction step itself. -/
-theorem rz_sys (segs : List Segment) (regs : BvMap word) (pc : word)
-    (mem rom : word → Option byte) (model : Model) (w : BitVec 32) (T : TSet)
-    (Hh : m_halted model = none) (Hlazy : m_vm_lazy model = [])
-    (HF : fetch_word segs pc = some w) (HE : is_ecall w = true)
-    (Hc : realizes segs (mkCfg (epend regs pc mem rom (getr regs 17)) model) T) :
-    realizes segs (mkCfg (mkst regs pc mem rom) model) T :=
-  rz_step segs (mkst regs pc mem rom) model (epend regs pc mem rom (getr regs 17)) T
-    Hh Hlazy rfl (step_ecall_epend segs regs pc mem rom w HF HE) Hc
-
-/-- The event a HALTING step appends: an exit's `ExitEv`, or — when the
-    post-model is killed — the `KillEv` of `Run.sstep.killed`.  A killed
-    model is halted, so the third arm below covers both steps with one
-    `m_halted model' = Some code` witness; every caller refutes that arm
-    from its own "no outcome halts" fact and never looks at the event. -/
-def halt_ev (m' : Model) (code : word) : event :=
-  match m_killed m' with
-  | some sig => .KillEv sig (m_fs m')
-  | none => .ExitEv code (m_fs m')
-
-/-- The forward direction every node uses: an admissible, non-halting
-    checker answer into a model without lazy mappings is an `sstep`. -/
-theorem sstep_of_check (segs : List Segment) (ms : machine_state) (model : Model)
-    (x8 : word) (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (Hh : m_halted model = none) (Hsvc : ms.ms_svc_pending = some x8)
-    (Hc : check_syscall (sys_input segs ms x8) eff model = .CheckOk m' evs)
-    (Hh' : m_halted m' = none) (Hlazy : m_vm_lazy m' = []) :
-    sstep segs (mkCfg ms model) evs
-      (.SNext (mkCfg (advance_past_svc (apply_effect ms eff)) m')) := by
-  refine .syscall ms model x8 eff m' m' evs Hh Hsvc ((check_syscall_ok_iff _ _ _ _ _).mp Hc) Hh' ?_
-  rw [materialize_model_accesses_no_lazy m' (syscall_effect_accesses eff) Hlazy]
-
-/-- Inversion of one transition at a pending syscall, phrased through the
-    checker.  Three `CheckOk` sub-cases: the ordinary step (into the
-    MATERIALIZED post-model), the materialization fault, the exit. -/
-theorem sstep_svc_inv (segs : List Segment) (ms : machine_state) (model : Model)
-    (x8 : word) (e : List event) (st : step_to)
-    (Hsvc : ms.ms_svc_pending = some x8)
-    (Hss : sstep segs (mkCfg ms model) e st) :
-    (∃ eff model' evs,
-        check_syscall (sys_input segs ms x8) eff model = .CheckOk model' evs ∧
-        (((∃ model'', m_halted model' = none ∧ e = evs ∧
-            materialize_model_accesses model' (syscall_effect_accesses eff) = some model'' ∧
-            st = .SNext (mkCfg (advance_past_svc (apply_effect ms eff)) model''))
-          ∨ (m_halted model' = none ∧ e = [] ∧
-            materialize_model_accesses model' (syscall_effect_accesses eff) = none ∧
-            st = .SError)
-          ∨ (∃ code, m_halted model' = some code ∧ e = evs ++ [halt_ev model' code] ∧
-            st = .SNext (mkCfg ms model')))))
-    ∨ (∃ eff, check_syscall (sys_input segs ms x8) eff model = .CheckUnmodeled ∧
-        e = [] ∧ st = .SError) := by
-  cases Hss with
-  | instr a b c d p5 p6 p7 => exact absurd p6 (by simp [Hsvc])
-  | instr_fault a b p5 p6 p7 => exact absurd p6 (by simp [Hsvc])
-  | instr_unmodeled a b p5 p6 p7 => exact absurd p6 (by simp [Hsvc])
-  | syscall a b c d mp mpp evs1 p8 p9 hspec p11 hmat =>
-      rw [Hsvc] at p9
-      obtain rfl := Option.some.inj p9
-      exact Or.inl ⟨d, mp, e, (check_syscall_ok_iff _ _ _ _ _).mpr hspec,
-        Or.inl ⟨mpp, p11, rfl, hmat, rfl⟩⟩
-  | syscall_materialization_fault a b c d mp evs1 p7 p8 hspec p10 hmat =>
-      rw [Hsvc] at p8
-      obtain rfl := Option.some.inj p8
-      exact Or.inl ⟨d, mp, evs1, (check_syscall_ok_iff _ _ _ _ _).mpr hspec,
-        Or.inr (Or.inl ⟨p10, rfl, hmat, rfl⟩)⟩
-  | exit a b c d mp evs1 code p8 p9 hspec p11 hk =>
-      rw [Hsvc] at p9
-      obtain rfl := Option.some.inj p9
-      refine Or.inl ⟨d, mp, evs1, (check_syscall_ok_iff _ _ _ _ _).mpr hspec,
-        Or.inr (Or.inr ⟨code, p11, ?_, rfl⟩)⟩
-      rw [show halt_ev mp code = event.ExitEv code (m_fs mp) from by unfold halt_ev; rw [hk]]
-  | killed a b c d mp evs1 sig p8 p9 hspec hk =>
-      rw [Hsvc] at p9
-      obtain rfl := Option.some.inj p9
-      cases hc : m_halted mp with
-      | none =>
-          rw [m_killed_of_m_halted_none mp hc] at hk
-          simp at hk
-      | some code =>
-          refine Or.inl ⟨d, mp, evs1, (check_syscall_ok_iff _ _ _ _ _).mpr hspec,
-            Or.inr (Or.inr ⟨code, hc, ?_, rfl⟩)⟩
-          rw [show halt_ev mp code = event.KillEv sig (m_fs mp) from by unfold halt_ev; rw [hk]]
-  | syscall_unmodeled a b c p4 p5 hspec =>
-      rw [Hsvc] at p5
-      obtain rfl := Option.some.inj p5
-      exact Or.inr ⟨mkEffect (BitVec.ofInt 64 0) [] [], (check_syscall_err_iff _ _ _).mpr hspec,
-        rfl, rfl⟩
-
-/-! =========================================================================
     `check_syscall` at sysno 66 is `check_writev`
     ========================================================================= -/
 
@@ -1040,25 +451,6 @@ theorem check_syscall_writev (i : SyscallInput) (eff : SyscallEffect) (m : Model
     LinuxSem.Checks.Sys.Dispatch.CheckedTable.check_syscall,
     LinuxSem.Checks.Sys.Dispatch.check_syscall, h,
     LinuxSem.Checks.Sys.Dispatch.ca_check_arm_writev]
-
-/-! =========================================================================
-    The syscall-input views of a raw `mkst`-side machine state
-    ========================================================================= -/
-
-theorem in_sysno_si (segs : List Segment) (ms : machine_state) (x8 : word) :
-    (sys_input segs ms x8).in_sysno = x8 := rfl
-
-theorem in_mem_si (segs : List Segment) (ms : machine_state) (x8 : word) :
-    (sys_input segs ms x8).in_mem = ms_read_byte ms := rfl
-
-theorem in_arg0_si (segs : List Segment) (ms : machine_state) (x8 : word) :
-    in_arg (sys_input segs ms x8) 0 = ms_gpr ms 0 := rfl
-
-theorem in_arg1_si (segs : List Segment) (ms : machine_state) (x8 : word) :
-    in_arg (sys_input segs ms x8) 1 = ms_gpr ms 1 := rfl
-
-theorem in_arg2_si (segs : List Segment) (ms : machine_state) (x8 : word) :
-    in_arg (sys_input segs ms x8) 2 = ms_gpr ms 2 := rfl
 
 /-! =========================================================================
     The checker at a writev ecall
@@ -1181,24 +573,6 @@ theorem writev_check (ms : machine_state) (x8 : word) (model : Model)
 end WithSegsChecker
 
 /-! =========================================================================
-    `apply_effect` of a no-write effect is the plain return-value update
-    ========================================================================= -/
-
-/-- `Common/CatSim`'s `apply_effect_no_write`. -/
-theorem apply_effect_no_write (ms : machine_state) (r : word) :
-    apply_effect ms (mkEffect r [] []) = set_gpr0 ms r := by
-  unfold apply_effect set_gpr0 mkEffect
-  rfl
-
-/-- `Common/CatSim`'s `apply_effect_copyins_no_write`: a recorded
-    copy-in ledger changes neither the memory nor the machine state. -/
-theorem apply_effect_copyins_no_write (ms : machine_state) (r : word)
-    (copyins : List (word × Nat)) :
-    apply_effect ms (with_copyins copyins (mkEffect r [] [])) = set_gpr0 ms r := by
-  unfold apply_effect with_copyins set_gpr0 mkEffect
-  rfl
-
-/-! =========================================================================
     The node at the pending state
     ========================================================================= -/
 
@@ -1269,8 +643,8 @@ theorem rz_writev_pending (ms : machine_state) (x8 : word) (model : Model)
     rw [Hchk]
     dsimp only [effs]
     rw [hkv, ite_eq_left hcond, ite_eq_left (access_ranges_eqb_refl _)]
-  refine realizes.node (c := mkCfg ms model)
-    (fun i : wr_index bss.flatten =>
+  refine realizes.rz_node (mkCfg ms model) (wr_index bss.flatten)
+    (fun i =>
       (bss.flatten.take i.1).map (.WriteEv (BitVec.ofInt 64 fd)))
     (fun i => mkCfg (advance_past_svc (set_gpr0 ms (BitVec.ofInt 64 (i.1 : Int)))) model)
     (fun i => T i.1) (wr_full bss.flatten hnb) ?_ (fun i => Hk i.1 i.2.1 i.2.2)

@@ -107,7 +107,7 @@
   claimed-effect test alone; `check_write_wloop_inv` then reads the two
   surviving tests, and `Checks.Sys.DispatchCompute.check_syscall_write`
   carries it from the checker to `syscall_spec`.  The step inversion
-  itself reuses `Common/LibWritev.lean`'s `sstep_svc_inv` — `Checks` has
+  itself reuses `Common/Nodes.lean`'s `sstep_svc_inv` — `Checks` has
   no `sstep` inversion of its own, and that one is phrased through the
   checker, which is exactly what the walk pins.
 
@@ -141,7 +141,7 @@ import LinuxSem.EquivalenceDefinition.Classifier
 import LinuxSem.EquivalenceDefinition.OmniEquivalence
 import LinuxSem.Checks.Examples
 import LinuxSem.Checks.Sys.DispatchCompute
-import LinuxSem.Common.LibWritev
+import LinuxSem.Common.Nodes
 
 set_option autoImplicit false
 
@@ -159,7 +159,7 @@ open LinuxSem.Checks.ExecutableSpecs (check_syscall check_syscall_ok_iff
   check_syscall_complete_ok check_syscall_complete_unmodeled)
 open LinuxSem.Checks.Sys.Fs.ReadWrite (check_write)
 open LinuxSem.Checks.Sys.DispatchCompute (check_syscall_write)
-open LinuxSem.Common.LibWritev (sstep_svc_inv halt_ev)
+open LinuxSem.Common.Nodes (sstep_svc_inv halt_ev)
 open LinuxSem.EquivalenceDefinition.OmniEquivalence
 open LinuxSem.EquivalenceDefinition.Equivalence (run_all_errors_errors)
 open LinuxSem.LinuxProcessSem.Sys.Syscall
@@ -1550,7 +1550,7 @@ theorem wloop_syscall_sstep (lim : Int) :
     (model'' := wloop_model lim) (evs := wloop_trace) rfl wloop_svc5 hspec rfl hmat
 
 /-- The one ecall transition, and the only one.  `Checks` has no
-    `sstep` inversion of its own, but `Common/LibWritev.lean` does
+    `sstep` inversion of its own, but `Common/Nodes.lean` does
     (`sstep_svc_inv`, the same inversion `Common`'s write nodes use), and
     it is phrased through the CHECKER — which is exactly what the staged
     evaluator above pins.  So the walk is: invert to the checker's three

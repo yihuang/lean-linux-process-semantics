@@ -23,9 +23,6 @@ jobs:
       - name: Build library and run conformance checks
         run: ./scripts/check.sh
 
-      - name: Build decoder CLI
-        run: lake build decoder
-
   # The `build` job also checks the binaries → Lean direction: RwxFlagNs is in
   # the root module, so `scripts/check.sh`'s `lake build` runs `embedElf%` over
   # the committed ELFs and typechecks the proof stated about those images.

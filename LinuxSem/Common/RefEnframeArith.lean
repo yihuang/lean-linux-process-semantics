@@ -384,45 +384,42 @@ theorem land_255 (a : Int) (H : 0 ≤ a) : zland a 255 = a % 256 := by
     ========================================================================= -/
 
 /- [smear] / [enframe_off] : see MallocDefs. -/
-section EnframeOffCheck
 
-set_option maxHeartbeats 0
-
-/-- The 65536-case check  runs (`vm_cast_no_check`): for every
-    `slack < 256` and `off0 < 256`, the offset is non-negative and at most
-    `slack`.  Discharged by evaluation; the options raise Lean's limits to
-    what 2^16 kernel-level steps need. -/
-theorem enframe_off_check :
-    zall 65536 (fun i =>
-      let slack := i / 256
-      let off0 := i % 256
-      let r := enframe_off slack off0
-      decide (0 ≤ r) && decide (r ≤ slack)) 0 = true := by
+/-- [smear] of a small value stays below twice it: it is the smallest `2^k - 1`
+    at or above its argument.  Checked by evaluation over the 256 values
+    [enframe_off] needs. -/
+theorem smear_small_check :
+    zall 256 (fun s => decide (0 ≤ smear s) && decide (smear s ≤ 2 * s)) 0 = true := by
   decide
 
-end EnframeOffCheck
+/-- Below 256 the masked candidate is at most [smear slack ≤ 2 * slack], so
+    subtracting [slack + 1] from one above [slack] lands in `[0, slack)`. -/
+theorem enframe_off_small (slack off0 : Int) (Hs : 0 ≤ slack ∧ slack < 256) (Ho : 0 ≤ off0) :
+    0 ≤ enframe_off slack off0 ∧ enframe_off slack off0 ≤ slack := by
+  have H := zallN_spec 256 (fun s => decide (0 ≤ smear s) && decide (smear s ≤ 2 * s))
+    smear_small_check slack Hs
+  have h0 : 0 ≤ smear slack := of_decide_eq_true (Bool.and_eq_true_iff.mp H).1
+  have h2 : smear slack ≤ 2 * slack := of_decide_eq_true (Bool.and_eq_true_iff.mp H).2
+  have hom : 0 ≤ z_land off0 (smear slack) ∧ z_land off0 (smear slack) ≤ smear slack := by
+    have hle : off0.toNat &&& (smear slack).toNat ≤ (smear slack).toNat := Nat.and_le_right
+    simp only [z_land]
+    omega
+  unfold enframe_off
+  dsimp only
+  split
+  · omega
+  · split <;> omega
 
-/-- The two conclusions the callers need, from the one brute-force check:
-    non-negative, at most `max slack off0`, and either within `slack` or
-    exactly the candidate `off0`. -/
+/-- The two conclusions the callers need: non-negative, at most `max slack off0`,
+    and either within `slack` or exactly the candidate `off0`. -/
 theorem enframe_off_bound (slack off0 : Int) (Hs : 0 ≤ slack)
     (Ho : 0 ≤ off0 ∧ off0 < 256) :
     0 ≤ enframe_off slack off0 ∧ enframe_off slack off0 ≤ max slack off0
       ∧ (enframe_off slack off0 ≤ slack ∨ enframe_off slack off0 = off0) := by
   by_cases hl : slack < 256
-  · have H := zallN_spec 65536 (fun i =>
-        let slack := i / 256
-        let off0 := i % 256
-        let r := enframe_off slack off0
-        decide (0 ≤ r) && decide (r ≤ slack)) enframe_off_check
-      (slack * 256 + off0) ⟨by omega, by omega⟩
-    rw [show (slack * 256 + off0) / 256 = slack from by omega,
-      show (slack * 256 + off0) % 256 = off0 from by omega] at H
-    have h1 : 0 ≤ enframe_off slack off0 := of_decide_eq_true (Bool.and_eq_true_iff.mp H).1
-    have h2 : enframe_off slack off0 ≤ slack := of_decide_eq_true (Bool.and_eq_true_iff.mp H).2
+  · obtain ⟨h1, h2⟩ := enframe_off_small slack off0 ⟨Hs, hl⟩ Ho.1
     exact ⟨h1, ⟨by omega, Or.inl h2⟩⟩
-  · have hge : 256 ≤ slack := by omega
-    have hle : off0 ≤ slack := by omega
+  · have hle : off0 ≤ slack := by omega
     have hoff : enframe_off slack off0 = off0 := by
       unfold enframe_off
       rw [ite_eq_left hle]
@@ -432,18 +429,8 @@ theorem enframe_off_le (slack off0 : Int) (Hs : 0 ≤ slack)
     (Ho : 0 ≤ off0 ∧ off0 < 256) :
     0 ≤ enframe_off slack off0 ∧ enframe_off slack off0 ≤ slack := by
   by_cases hl : slack < 256
-  · have H := zallN_spec 65536 (fun i =>
-        let slack := i / 256
-        let off0 := i % 256
-        let r := enframe_off slack off0
-        decide (0 ≤ r) && decide (r ≤ slack)) enframe_off_check
-      (slack * 256 + off0) ⟨by omega, by omega⟩
-    rw [show (slack * 256 + off0) / 256 = slack from by omega,
-      show (slack * 256 + off0) % 256 = off0 from by omega] at H
-    exact ⟨of_decide_eq_true (Bool.and_eq_true_iff.mp H).1,
-      of_decide_eq_true (Bool.and_eq_true_iff.mp H).2⟩
-  · have hge : 256 ≤ slack := by omega
-    have hle : off0 ≤ slack := by omega
+  · exact enframe_off_small slack off0 ⟨Hs, hl⟩ Ho.1
+  · have hle : off0 ≤ slack := by omega
     have hoff : enframe_off slack off0 = off0 := by
       unfold enframe_off
       rw [ite_eq_left hle]

@@ -5066,8 +5066,7 @@ theorem seqSpec_set_fds_err_ret_ok_inv (fds : List (word × FdEntry)) (e : Int)
   simp only [set_fds, modifySpec, LinuxSem.LinuxProcessSem.modify] at h1
   cases h1
   simp only [LinuxSem.LinuxProcessSem.Sys.Uaccess.err_ret,
-    LinuxSem.LinuxProcessSem.Sys.Uaccess.ret_only,
-    LinuxSem.LinuxProcessSem.pure] at h2
+    LinuxSem.LinuxProcessSem.Sys.Uaccess.ret_only] at h2
   cases h2
   simp only [List.nil_append] at h3
   cases h3

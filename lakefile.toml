@@ -1,6 +1,6 @@
 name = "lean-linux-process-semantics"
 version = "0.1.0"
-defaultTargets = ["LinuxSem"]
+defaultTargets = ["LinuxSem", "decoder"]
 
 [[lean_lib]]
 name = "LinuxSem"

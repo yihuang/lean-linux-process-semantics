@@ -28,7 +28,7 @@
   THE SHAPE.  An arm's `ca_check` field is a lambda around its checker
   (`ca_check := fun i eff m => check_getcwd (in_arg i 1) eff m`), so
   `arm_preserves_vm arm_X` is one `simp only [arm_X] at H` (the arm's own
-  TERM-level equation, the rule recorded in NOTES.md) followed by the arm's frame
+  TERM-level equation) followed by the arm's frame
   lemma applied to `m_vmmaps m' = m_vmmaps m`.  No arm needs its own
   invariant argument: 74 arms have their own frame, 11 share one
   (`check_setid_frame` covers setgid/setuid, `check_setresid_frame`

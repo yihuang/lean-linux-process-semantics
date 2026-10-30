@@ -3,7 +3,7 @@ A soundness audit: the theorems below must depend only on Lean's three
 standard axioms (`propext`, `Classical.choice`, `Quot.sound`).
 
 A tactic that silently *drops* a goal (e.g. an `elab` that clears the goal
-list on failure — see PORTING.md §5.3) would leave a `sorryAx` in the proof
+list on failure) would leave a `sorryAx` in the proof
 term while `scripts/check.sh`'s token grep would stay clean.  Checking the
 axioms catches that class of hole.
 
