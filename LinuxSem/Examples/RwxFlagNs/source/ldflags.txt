@@ -1,0 +1,8 @@
+# Replace the default `-z separate-code --error-rwx-segments` link (see the
+# Examples README): lay the whole binary out as ONE RWX LOAD segment via the
+# explicit script below, reproducing GNU ld's -z noseparate-code merged
+# layout deterministically across binutils versions.  The model fetches a
+# w+x segment through the writable overlay, so this image is an
+# ordinary, provable source.
+-Wl,-T,rwx.lds
+-Wl,--no-warn-rwx-segments
