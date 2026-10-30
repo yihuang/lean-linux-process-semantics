@@ -3,8 +3,6 @@ name: build
 on:
   push:
   pull_request:
-  # Manual trigger for the one-off toolchain probes below (see `probe-muslcc`).
-  workflow_dispatch:
 
 jobs:
   build:
@@ -12,11 +10,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install elan (pinned by lean-toolchain)
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
-            | sh -s -- -y --default-toolchain none
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      # Installs elan (pinned by `lean-toolchain`) and caches the toolchain and
+      # `.lake` between runs.  The BUILD is left to `scripts/check.sh`, which
+      # is also the hygiene/audit/decoder gate; `build: false` avoids building
+      # twice.
+      - uses: leanprover/lean-action@v1
+        with:
+          build: false
+          test: false
+          lint: false
 
       - name: Build library and run conformance checks
         run: ./scripts/check.sh
@@ -36,15 +38,17 @@ jobs:
 
       # The C side of the example is built by the real GNU musl cross compiler,
       # taken from nixpkgs (shell.nix does the same for a local checkout); the
-      # script has no fallback to another compiler.  The nixpkgs channel is the
-      # source of truth for its version: the committed source binary is one
-      # specific GNU musl build, so a different GCC version is expected to emit
-      # a different program (same layout) — the script reports that as a warning,
-      # not a failure.
-      - name: Install nix (riscv64-linux-musl-gcc)
+      # script has no fallback to another compiler.
+      #
+      # The nixpkgs REVISION is pinned, and the derivation is fetched with
+      # `--option max-jobs 0`, for a practical reason measured here: nixpkgs'
+      # `pkgsCross.riscv64-musl` is only *sometimes* in cache.nixos.org (the
+      # current nixos-unstable tip and nixos-25.05 are not), and a miss means
+      # nix BUILDS GCC from source — a >35-minute job.  This revision is the one
+      # `shell.nix` resolves locally, it is cached, and `max-jobs 0` turns any
+      # future cache miss into a fast, explicit failure instead of a hang.
+      - name: Install nix
         uses: cachix/install-nix-action@v31
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
 
       # zig builds the RwxFlagNs target.  Pinned; the checksum is the one
       # https://ziglang.org/download/index.json publishes for this tarball.
@@ -67,47 +71,17 @@ jobs:
       # program bytes are also required to match (the section header table is
       # masked: the loader never reads it).  The source's program bytes are
       # reported but not gated here: its committed binary is one specific GNU
-      # musl build, while the nixpkgs cross GCC is whatever the channel has, so
-      # a codegen difference is expected and is a warning.  A `--strict-bytes`
+      # musl build, and the pinned cross GCC (15.2.0, binutils 2.44) was
+      # measured to produce a different PROGRAM (25 of 229 file-extent bytes,
+      # code included), so a warning is the correct outcome.  A `--strict-bytes`
       # run on a host with the exact compiler is the byte-level gate.
       - name: Rebuild and compare the committed ELF images
         run: |
-          nix shell nixpkgs#pkgsCross.riscv64-musl.stdenv.cc -c \
-            bash tools/e2e/rwx_flag_ns.sh
-
-  # ------------------------------------------------------------------------
-  # A one-off probe, run from the Actions tab (`workflow_dispatch`), for the
-  # question the source gate depends on: does the nixpkgs GNU musl compiler
-  # reproduce the committed `program.src.elf`'s PROGRAM bytes?
-  #
-  # CI is x86_64-linux, where `pkgsCross.riscv64-musl` is a cached DOWNLOAD
-  # (unlike on aarch64-darwin), so this is cheap.  It builds only the source
-  # (`--only=source`, no zig) and requires the program bytes to match
-  # (`--require-source-program`, section-table bookkeeping masked).
-  #
-  #   green -> the channel's GCC reproduces the program the proof walks, and
-  #            the source gate can become the default (`--require-source-program`
-  #            in the e2e job too);
-  #   red   -> the committed binary came from some other GCC; the per-segment
-  #            lines in the log say how far off, and `--update --update-source`
-  #            re-baselines it (with the proof re-derivation that implies).
-  #
-  # (The 2021 musl.cc tarball is NOT a candidate for the upstream build:
-  # `source/ldflags.txt` passes `-Wl,--no-warn-rwx-segments`, which binutils
-  # only accepts from 2.39 on, i.e. the original linker is 2023 or newer.)
-  probe-source:
-    name: probe (nixpkgs GCC vs committed source binary)
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install nix (riscv64-linux-musl-gcc)
-        uses: cachix/install-nix-action@v31
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
-
-      - name: Build only the source and require the program bytes to match
-        run: |
-          nix shell nixpkgs#pkgsCross.riscv64-musl.stdenv.cc -c \
-            bash tools/e2e/rwx_flag_ns.sh --only=source --require-source-program
+          nix shell --impure --option max-jobs 0 \
+            --expr 'let
+              np = builtins.fetchTarball {
+                url = "https://github.com/NixOS/nixpkgs/archive/c0f3d81a7ddbc2b1332be0d8481a672b4f6004d6.tar.gz";
+              };
+              pkgs = import np { system = "x86_64-linux"; };
+            in pkgs.pkgsCross.riscv64-musl.stdenv.cc' \
+            -c bash tools/e2e/rwx_flag_ns.sh

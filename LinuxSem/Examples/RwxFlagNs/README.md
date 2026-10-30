@@ -160,15 +160,20 @@ layout, entry, phdr record or entry bytes are not the ones the proof expects.
   program fails too; the source's GCC-version drift is a warning, as above.
   The committed binaries are never rewritten by CI — the script builds into
   `.lake/e2e/rwx/` and compares.
-- **`probe-source`** — manual (`workflow_dispatch`), not part of the gate:
-  builds only the source with nixpkgs' cross GCC (a cached download on the
-  Linux runner) and requires the **program bytes** to match the committed
-  binary (`--only=source --require-source-program`).  Green answers "this
-  compiler reproduces the program the proof walks" — which is what would let
-  the source's program bytes become a hard gate by default; red means the
-  committed binary came from some other GCC, and the log says how far off.
-  (The 2021 musl.cc tarball is ruled out as the origin: `ldflags.txt` passes
-  `-Wl,--no-warn-rwx-segments`, which binutils only accepts from 2.39.)
+
+**What the current toolchain measures.**  nixpkgs' cross GCC (15.2.0, binutils
+2.44) gives the source image the same *layout* but a **different program**: 25
+of the 229 file-extent bytes differ, including two instruction encodings in
+`.text` and a larger `p_memsz` (0x110 vs 0xf0) — not merely the section table.
+So the committed source binary came from an older GNU build, the source's
+program bytes stay a warning, and making them a hard gate needs either that
+original compiler (then `--strict-bytes`) or a re-baseline
+(`--update --update-source`) with the proof re-derivation.  (A version hunt is
+not cheap through nixpkgs: only the default cross GCC is in the binary cache —
+`gcc13`/`gcc14` cross toolchains are not, so probing them builds GCC from
+source.)  The 2021 musl.cc tarball is ruled out as the origin anyway:
+`ldflags.txt` passes `-Wl,--no-warn-rwx-segments`, which binutils only accepts
+from 2.39.
 
 ## Why the image is page-rounded
 
